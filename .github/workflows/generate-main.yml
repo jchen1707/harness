@@ -49,6 +49,17 @@ jobs:
             python3 scripts/check.py
           fi
 
+      # Layer A is copied verbatim into two repositories that format Markdown
+      # differently: one runs Prettier over `*.md`, the other does not. Shared prose under
+      # two formatters reflows on every commit, and a reflow breaks the vendored copy's
+      # sha check on every sync. So the plugin owns its own formatting, both consumers
+      # exclude the vendored tree from theirs, and this is where that is enforced.
+      #
+      # `npx` rather than a dependency: this repo has no package.json and should not grow
+      # one for a formatter. The runner has Node; the check is pinned by major version.
+      - name: The plugin owns its own formatting
+        run: npx --yes prettier@3 --check .
+
       - name: Build the main tree from this ref
         run: python3 .agents/transform/generate_main.py . "${RUNNER_TEMP}/main"
 

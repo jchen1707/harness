@@ -24,7 +24,18 @@ import sys
 from pathlib import Path
 
 # What layer A actually ships. Paths are relative to the plugin root.
-VENDORED = ("docs/agents",)
+#
+# `agents/` and `workflows/` are the two Claude Code reads natively from a plugin; a
+# harness that does not read them still gets the files, because the neutral carrier for
+# the same content -- the `full-review` skill -- resolves the frames by path.
+VENDORED = (
+    "agents",
+    "commands",
+    "docs/agents",
+    "schema",
+    "skills",
+    "workflows",
+)
 
 PLUGIN_ROOT = "plugins/harness"
 VENDOR_DIR = Path(".agents/vendor/harness")

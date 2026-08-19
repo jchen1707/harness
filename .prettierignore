@@ -1,0 +1,14 @@
+# Layer A is prose and one workflow, and it is copied verbatim into two repositories that
+# format Markdown differently — one runs Prettier over `*.md`, the other does not. Shared
+# prose under two formatters reflows on every commit and breaks the vendored copy's sha
+# check on every sync, so the plugin owns its own formatting and the consumers exclude it.
+#
+# `proseWrap: preserve` is the half of that decision that matters. Prettier's default
+# reflows every paragraph to `printWidth`, which would rewrite every file here on the
+# first run and make every future diff a paragraph rather than a sentence. Preserving the
+# hand wrapping keeps a one-word edit a one-line diff, which is what makes a review of
+# doctrine readable at all.
+
+# The stacks are mounted for reading. They own their own formatting.
+python-harness/
+frontend-harness/

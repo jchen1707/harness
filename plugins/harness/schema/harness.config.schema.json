@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jchen1707/harness/blob/v2/plugins/harness/schema/harness.config.schema.json",
+  "title": "harness.config.json",
+  "description": "What layer A needs to know about one consuming repository. Layer A is authored once and identical everywhere; every stack fact it depends on is declared here, so the shared half never has to name a toolchain, a directory or a team key. One file per repository, at its root \u2014 a scaffolded product repo with two apps declares one per app.",
+  "type": "object",
+  "required": ["name", "gates"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "This repository's name, as it appears in prose and in review output.",
+      "minLength": 1
+    },
+    "tracker": {
+      "type": "object",
+      "description": "Issue-tracker facts. The doctrine is in docs/agents/issue-tracker.md; only the keys that identify this repo's project belong here.",
+      "additionalProperties": false,
+      "properties": {
+        "team": {
+          "type": "string",
+          "description": "Team key, as it appears in issue ids and in branch names (`<type>/<TEAM>-<num>-<slug>`).",
+          "minLength": 1
+        }
+      }
+    },
+    "install": {
+      "$ref": "#/$defs/argv",
+      "description": "Bring dependencies up to date. Run before a gate when the lockfile or manifest changed."
+    },
+    "dev": {
+      "type": "object",
+      "description": "The development server, for /run. Omit in a repo that has none.",
+      "additionalProperties": false,
+      "required": ["run"],
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/argv"
+        },
+        "url": {
+          "type": "string",
+          "description": "Where it serves once up."
+        },
+        "readyCheck": {
+          "type": "string",
+          "description": "One sentence naming what to confirm before reporting success \u2014 a route that must respond, a page that must render."
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "description": "The Definition of Done, as commands. This is the single declaration of what must be green: /lint, /test, the verify hook and the meta-repo's cross-stack job all read it, so a gate added here is added everywhere at once.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind", "run"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "How the gate is named in output. Usually the tool.",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": ["lint", "format", "types", "test", "e2e", "integration"],
+            "description": "What the gate checks. /lint runs lint+format+types, /test runs test, and e2e and integration are opt-in \u2014 they need a browser or a container and are not part of the default local loop."
+          },
+          "run": {
+            "$ref": "#/$defs/argv"
+          },
+          "when": {
+            "type": "string",
+            "description": "One sentence naming when this gate is required, for the kinds that are not always run. Omit for a gate that always applies."
+          },
+          "caveat": {
+            "type": "string",
+            "description": "One sentence naming how this gate can pass without having checked anything \u2014 a linter rule that fails open on an unclassified file, a metric the runner could not measure, a suite that silently collected nothing. /verify prints it beside the green result. A gate whose vacuous pass is undocumented is worse than a missing gate, because it is trusted."
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "description": "What /full-review needs that layer A cannot know. The reviewer frames are shared; the checklists they read are this repo's.",
+      "additionalProperties": false,
+      "properties": {
+        "agentDir": {
+          "type": "string",
+          "description": "Where this repo keeps its own subagent definitions. Searched after the plugin's, so a stack definition \u2014 the ninth axis \u2014 resolves, and a stack may override a shared frame deliberately.",
+          "default": ".agents/agents"
+        },
+        "checklistDir": {
+          "type": "string",
+          "description": "Where this repo keeps the stack half of each shared subagent, one file per agent name.",
+          "default": "docs/agents/subagents"
+        },
+        "ninthAxis": {
+          "type": "object",
+          "description": "The axis that is this stack's alone. Eight axes are shared; the ninth is the one the other stack has no equivalent for, and it is a whole definition rather than a frame plus a checklist.",
+          "additionalProperties": false,
+          "required": ["label", "agent"],
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "agent": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "styleEnforcedBy": {
+          "type": "string",
+          "description": "The tools that already own style, named as prose. The synthesiser is told to drop any finding these enforce, because a reviewer repeating the linter is noise.",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "argv": {
+      "type": "array",
+      "description": "A command as argv, never as a shell string. A string would have to be parsed by a shell, and the one thing a config file must not do is decide how its own values get quoted.",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

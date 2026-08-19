@@ -50,3 +50,43 @@ jobs:
       # else in this repo.
       - name: The submodules match this ref
         run: python3 scripts/check_submodules.py --pins
+
+  # The job phase 3 deferred, and phase 4 earns. Until now layer A was prose, and prose
+  # cannot break a build; it now carries a workflow, a config schema and the review frames
+  # every axis is assembled from, and phase 5 adds the hooks.
+  #
+  # The question only this repo can ask: does the layer A *on this branch* still satisfy
+  # each stack's own Definition of Done? Neither stack can ask it — each sees layer A only
+  # at the sha it pinned, which is by construction the last one that worked.
+  #
+  # The gate list is read from each stack's `harness.config.json`, never restated here.
+  # Restating it would be a second authoring of the thing this repository exists to own
+  # once, and it would drift.
+  cross-stack:
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Toolchains, not gates. Standing up a runtime is a property of the runner; which
+      # commands constitute the Definition of Done is a property of the stack, and that
+      # half stays in the stack.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend-harness/.nvmrc
+          cache: pnpm
+          cache-dependency-path: frontend-harness/pnpm-lock.yaml
+
+      - name: Layer A on this branch passes both stacks' gates
+        run: python3 scripts/cross_stack.py
