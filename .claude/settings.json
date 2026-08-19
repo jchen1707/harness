@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/scripts/check_submodules.py",
+              "--hook"
+            ],
+            "timeout": 20,
+            "statusMessage": "Checking the submodules match this branch…"
+          }
+        ]
+      }
+    ]
+  }
+}
