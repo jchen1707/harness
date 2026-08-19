@@ -88,6 +88,27 @@ def build_manifest(harness: Path, files: list[Path]) -> dict:
     }
 
 
+def head_content(harness: Path, ref: str) -> dict[str, str]:
+    """Hash layer A as of `ref`, keyed the same way the manifest keys it.
+
+    Read from the ref rather than the working tree: a harness checkout sitting on another
+    branch, or with uncommitted edits, must not change whether a consumer is called stale.
+    """
+    listing = run(["git", "ls-tree", "-r", "-z", "--name-only", ref, "--"]
+                  + [f"{PLUGIN_ROOT}/{entry}" for entry in VENDORED], cwd=harness)
+    out: dict[str, str] = {}
+    for name in filter(None, listing.split("\0")):
+        blob = subprocess.run(  # noqa: S603
+            ["git", "show", f"{ref}:{name}"], cwd=harness,
+            capture_output=True, check=False,
+        )
+        if blob.returncode != 0:
+            continue
+        rel = str(Path(name).relative_to(PLUGIN_ROOT))
+        out[rel] = hashlib.sha256(blob.stdout).hexdigest()
+    return out
+
+
 def cmd_sync(harness: Path, target: Path) -> int:
     files = source_files(harness)
     if not files:
@@ -138,18 +159,35 @@ def cmd_check(target: Path, harness: Path | None) -> int:
         problems.append(f"not part of layer A: {extra}")
 
     # Freshness -- needs the harness repo. Skipped when it was not supplied.
+    #
+    # Measured on the vendored *content*, not on the sha. Most commits to harness touch
+    # its tooling, its own workflows or the plugin manifest, none of which are vendored.
+    # Failing on every such commit would red-line every open PR in every consuming repo
+    # for a change that cannot reach them -- an alarm that is wrong more often than it is
+    # right is one people learn to ignore, which costs the alarm that matters.
     if harness is not None:
         pinned = manifest["sha"]
         head = run(["git", "rev-parse", f"origin/{SOURCE_BRANCH}"], cwd=harness)
         if pinned != head:
-            behind = run(
-                ["git", "rev-list", "--count", f"{pinned}..{head}"], cwd=harness
-            )
-            problems.append(
-                f"stale pin: vendored layer A is {behind} commit(s) behind "
-                f"harness@{SOURCE_BRANCH} ({pinned[:9]} -> {head[:9]}). "
-                f"Run `vendor_sync.py sync`."
-            )
+            current = head_content(harness, head)
+            if current == recorded:
+                behind = run(
+                    ["git", "rev-list", "--count", f"{pinned}..{head}"], cwd=harness
+                )
+                print(
+                    f"note: pin is {behind} commit(s) behind harness@{SOURCE_BRANCH} "
+                    f"({pinned[:9]} -> {head[:9]}), but no vendored file changed"
+                )
+            else:
+                moved = sorted(
+                    set(current) ^ set(recorded)
+                    | {f for f in set(current) & set(recorded) if current[f] != recorded[f]}
+                )
+                problems.append(
+                    f"stale pin: layer A moved in harness@{SOURCE_BRANCH} "
+                    f"({pinned[:9]} -> {head[:9]}). Run `vendor_sync.py sync`."
+                )
+                problems.extend(f"    changed upstream: {f}" for f in moved)
     else:
         print("note: harness checkout not supplied -- integrity checked, freshness not")
 

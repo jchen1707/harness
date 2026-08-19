@@ -137,6 +137,32 @@ def check_vendor_round_trip() -> None:
         else:
             ok("check catches a hand-edited vendored file")
 
+        # A pin behind HEAD is only stale when the vendored content actually moved.
+        # Most harness commits touch tooling or the plugin manifest, neither of which is
+        # vendored; failing on those would red-line every consuming PR for a change that
+        # cannot reach it. Restore the tree, then age the pin without touching content.
+        edited.write_text(edited.read_text().removesuffix("\nlocal edit\n"))
+        older = run(["git", "rev-list", "--max-parents=0", "-n", "1", "HEAD"], cwd=ROOT)
+        if older.returncode == 0 and older.stdout.strip():
+            manifest_path = vendored / "MANIFEST.json"
+            aged = json.loads(manifest_path.read_text())
+            aged["sha"] = older.stdout.strip()
+            manifest_path.write_text(json.dumps(aged, indent=2) + "\n")
+            behind = run(
+                [sys.executable, str(VENDOR_SYNC), "check", "--target", str(target),
+                 "--harness", str(ROOT)],
+                cwd=ROOT,
+            )
+            if behind.returncode != 0:
+                fail(
+                    "check fails on a pin that is behind but content-identical -- "
+                    f"consuming PRs would go red for nothing: {behind.stdout.strip()}"
+                )
+            elif "no vendored file changed" not in behind.stdout:
+                fail("check passed but did not report why the pin is behind")
+            else:
+                ok("check tolerates a behind-but-identical pin, and says so")
+
         # And a file that layer A does not ship must not survive a sync.
         stray = vendored / "stray.md"
         stray.write_text("not part of layer A\n")
