@@ -1,17 +1,11 @@
 {
   "name": "harness",
-  "version": "0.1.1",
-  "description": "Stack-neutral agent-harness layer: issue tracker conventions, triage label mapping, domain-doc consumption rules and secret-handling doctrine, shared by every harness repo.",
+  "version": "0.2.0",
+  "description": "Stack-neutral agent-harness layer: the shared review axes, the eight workflow commands, the shared skills and the full-review fan-out, plus issue-tracker, triage, domain and secret-handling doctrine. Every stack fact it needs comes from the consuming repo's harness.config.json.",
   "author": {
     "name": "jchen1707"
   },
   "repository": "https://github.com/jchen1707/harness",
   "license": "MIT",
-  "keywords": [
-    "harness",
-    "agents",
-    "linear",
-    "triage",
-    "conventions"
-  ]
+  "keywords": ["harness", "agents", "code-review", "linear", "triage", "conventions"]
 }

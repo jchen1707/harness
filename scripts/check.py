@@ -15,6 +15,7 @@ Stdlib only, for the same reason the rest of this repo is: no setup step anywher
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,22 @@ VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
 SUBMODULE_CHECK = ROOT / "scripts" / "check_submodules.py"
 GENERATOR = Path(".agents") / "transform" / "generate_main.py"
 PLUGIN_DIR = "plugins/harness"
+
+
+def _source_branch() -> str:
+    """The branch consumers vendor from, read from `vendor_sync.py` rather than restated.
+
+    Two copies of the same constant is the drift this repository exists to remove, and a
+    fixture pinned to the wrong branch fails in a way that reads like a real defect.
+    """
+    text = (ROOT / "scripts" / "vendor_sync.py").read_text(encoding="utf-8")
+    found = re.search(r'^SOURCE_BRANCH = "([^"]+)"', text, re.MULTILINE)
+    if not found:
+        raise SystemExit("vendor_sync.py no longer declares SOURCE_BRANCH")
+    return found.group(1)
+
+
+SOURCE_BRANCH = _source_branch()
 failures: list[str] = []
 
 
@@ -103,8 +120,19 @@ def check_vendor_round_trip() -> None:
         target = Path(tmp) / "consumer"
         target.mkdir()
 
+        # Against a clone at HEAD, not this working tree. Two reasons: a consumer only ever
+        # receives committed content, so that is what the round-trip should exercise; and
+        # `sync` now refuses a dirty checkout, which would otherwise make this gate
+        # unrunnable for the one person most likely to want it -- somebody midway through
+        # editing layer A.
+        source = Path(tmp) / "harness"
+        cloned = run(["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(source)], cwd=ROOT)
+        if cloned.returncode != 0:
+            fail(f"could not clone the harness for the round-trip: {cloned.stderr.strip()}")
+            return
+
         synced = run(
-            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(ROOT), "--target", str(target)],
+            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source), "--target", str(target)],
             cwd=ROOT,
         )
         if synced.returncode != 0:
@@ -139,31 +167,23 @@ def check_vendor_round_trip() -> None:
         else:
             ok("check catches a hand-edited vendored file")
 
-        # A pin behind HEAD is only stale when the vendored content actually moved.
-        # Most harness commits touch tooling or the plugin manifest, neither of which is
-        # vendored; failing on those would red-line every consuming PR for a change that
-        # cannot reach it. Restore the tree, then age the pin without touching content.
-        edited.write_text(edited.read_text().removesuffix("\nlocal edit\n"))
-        older = run(["git", "rev-list", "--max-parents=0", "-n", "1", "HEAD"], cwd=ROOT)
-        if older.returncode == 0 and older.stdout.strip():
-            manifest_path = vendored / "MANIFEST.json"
-            aged = json.loads(manifest_path.read_text())
-            aged["sha"] = older.stdout.strip()
-            manifest_path.write_text(json.dumps(aged, indent=2) + "\n")
-            behind = run(
-                [sys.executable, str(VENDOR_SYNC), "check", "--target", str(target),
-                 "--harness", str(ROOT)],
-                cwd=ROOT,
-            )
-            if behind.returncode != 0:
-                fail(
-                    "check fails on a pin that is behind but content-identical -- "
-                    f"consuming PRs would go red for nothing: {behind.stdout.strip()}"
-                )
-            elif "no vendored file changed" not in behind.stdout:
-                fail("check passed but did not report why the pin is behind")
-            else:
-                ok("check tolerates a behind-but-identical pin, and says so")
+        # A sync from a dirty checkout would pin a sha whose content exists nowhere. Dirty
+        # the clone rather than this checkout: a gate that edits the repository it is
+        # gating has a failure mode of its own.
+        scratch = source / PLUGIN_DIR / "docs" / "agents" / ".check-dirty.md"
+        scratch.write_text("uncommitted\n")
+        dirty = run(
+            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source),
+             "--target", str(target)],
+            cwd=ROOT,
+        )
+        scratch.unlink()
+        if dirty.returncode == 0:
+            fail("sync accepts a dirty harness checkout -- the pin would name content that is not in it")
+        elif "uncommitted" not in dirty.stderr + dirty.stdout:
+            fail("sync refused a dirty checkout but did not say why")
+        else:
+            ok("sync refuses a dirty harness checkout")
 
         # And a file that layer A does not ship must not survive a sync.
         stray = vendored / "stray.md"
@@ -173,6 +193,97 @@ def check_vendor_round_trip() -> None:
             fail("check passes with an unrecognised file in the vendored tree")
         else:
             ok("check catches an unrecognised vendored file")
+
+
+def check_vendor_freshness() -> None:
+    """Freshness is measured on content, and both of its answers have to be right.
+
+    A pin behind the branch tip is only stale when layer A actually moved. Most commits
+    here touch tooling, workflows or the plugin manifest, none of which is vendored --
+    failing on those would red-line every open PR in every consuming repo for a change
+    that cannot reach it, and an alarm that is wrong more often than it is right is one
+    people learn to ignore.
+
+    Proving both answers needs a harness whose history is known, so this builds one. The
+    fixture used to age the pin against this repository's own root commit, which was
+    content-identical only by accident: the first phase to add a file to layer A turned
+    the guard red for the wrong reason, which is exactly the failure it exists to catch
+    elsewhere.
+    """
+    print("vendor freshness")
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        source, remote, consumer = base / "harness", base / "origin.git", base / "consumer"
+
+        def git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+            return run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd)
+
+        layer_a = source / PLUGIN_DIR / "docs" / "agents"
+        layer_a.mkdir(parents=True)
+        (source / "README.md").write_text("harness fixture\n")
+        (layer_a / "doctrine.md").write_text("shared doctrine\n")
+        git("init", "-q", "-b", SOURCE_BRANCH, cwd=source)
+        git("add", "-A", cwd=source)
+        git("commit", "-qm", "layer A", cwd=source)
+
+        remote.mkdir()
+        git("init", "-q", "--bare", cwd=remote)
+        git("remote", "add", "origin", str(remote), cwd=source)
+        pushed = git("push", "-q", "origin", SOURCE_BRANCH, cwd=source)
+        if pushed.returncode != 0:
+            fail(f"could not build the fixture remote: {pushed.stderr.strip()}")
+            return
+        git("fetch", "-q", "origin", cwd=source)
+
+        consumer.mkdir()
+        synced = run(
+            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source),
+             "--target", str(consumer)],
+            cwd=ROOT,
+        )
+        if synced.returncode != 0:
+            fail(f"sync failed against the fixture: {synced.stderr.strip()}")
+            return
+
+        def freshness_check() -> subprocess.CompletedProcess[str]:
+            return run(
+                [sys.executable, str(VENDOR_SYNC), "check", "--target", str(consumer),
+                 "--harness", str(source)],
+                cwd=ROOT,
+            )
+
+        # A commit that cannot reach the consumer must not call it stale.
+        (source / "README.md").write_text("harness fixture, edited\n")
+        git("add", "-A", cwd=source)
+        git("commit", "-qm", "docs: nothing layer A ships", cwd=source)
+        git("push", "-q", "origin", SOURCE_BRANCH, cwd=source)
+        git("fetch", "-q", "origin", cwd=source)
+
+        behind = freshness_check()
+        if behind.returncode != 0:
+            fail(
+                "check fails on a pin that is behind but content-identical -- "
+                f"consuming PRs would go red for nothing: {behind.stdout.strip()}"
+            )
+        elif "no vendored file changed" not in behind.stdout:
+            fail("check passed but did not report why the pin is behind")
+        else:
+            ok("a pin behind on non-vendored commits is not called stale")
+
+        # And a commit that does reach it must.
+        (layer_a / "doctrine.md").write_text("shared doctrine, revised\n")
+        git("add", "-A", cwd=source)
+        git("commit", "-qm", "docs: revise layer A", cwd=source)
+        git("push", "-q", "origin", SOURCE_BRANCH, cwd=source)
+        git("fetch", "-q", "origin", cwd=source)
+
+        stale = freshness_check()
+        if stale.returncode == 0:
+            fail("check passes on a pin whose layer A moved upstream -- staleness is silent")
+        elif "doctrine.md" not in stale.stdout:
+            fail(f"check failed but did not name the changed file: {stale.stdout.strip()}")
+        else:
+            ok("a pin whose layer A moved is called stale, and the file is named")
 
 
 def check_generated_tree() -> None:
@@ -313,6 +424,156 @@ def check_submodule_guard() -> None:
             ok("hook mode emits SessionStart context for a mismatch")
 
 
+# The axes `full-review` runs, and the agents behind them. Layer A owns the eight shared
+# ones; the ninth is whatever the consuming repo's config names.
+SHARED_AXES = (
+    "standards-reviewer",
+    "spec-checker",
+    "security-reviewer",
+    "test-reviewer",
+    "simplicity-reviewer",
+    "design-reviewer",
+    "perf-reviewer",
+    "cost-reviewer",
+)
+GATE_KINDS = {"lint", "format", "types", "build", "test", "e2e", "integration"}
+
+
+def check_layer_a_composition() -> None:
+    """A shared frame plus a stack checklist has to actually compose.
+
+    Every reviewer in layer A is half a definition: the frame here carries the role, the
+    method and the reporting rules, and the repo's own `docs/agents/subagents/<name>.md`
+    carries what "in this repo's terms" means there. Neither half is a review on its own,
+    and the failure is silent in both directions -- a frame pointing at a missing file
+    still reviews, on nothing but its own general advice, and reports a confident clean.
+    """
+    print("layer A composition")
+    agents_dir = ROOT / PLUGIN_DIR / "agents"
+    frames = {p.stem for p in agents_dir.glob("*.md")}
+
+    missing = [a for a in SHARED_AXES if a not in frames]
+    if missing:
+        fail(f"full-review runs axes with no frame in the plugin: {', '.join(missing)}")
+    else:
+        ok(f"all {len(SHARED_AXES)} shared axes have a frame")
+
+    # A frame that names a checklist must name its own. A copy-paste that leaves another
+    # agent's filename behind sends the reviewer to the wrong checklist, and the review
+    # still runs.
+    for frame in sorted(frames):
+        text = (agents_dir / f"{frame}.md").read_text(encoding="utf-8")
+        referenced = set(re.findall(r"docs/agents/subagents/([\w.-]+)\.md", text))
+        if not referenced:
+            continue
+        if referenced != {frame}:
+            fail(
+                f"{frame}.md points at checklist(s) {sorted(referenced)} rather than its own"
+            )
+        else:
+            ok(f"{frame} points at its own checklist")
+
+    workflow = ROOT / PLUGIN_DIR / "workflows" / "full-review.js"
+    if not workflow.exists():
+        fail("full-review.js is missing from the plugin")
+        return
+    body = workflow.read_text(encoding="utf-8")
+    declared = set(re.findall(r"agent: '([\w-]+)'", body))
+    if declared != set(SHARED_AXES):
+        fail(
+            "full-review.js declares "
+            f"{sorted(declared)}, which is not the shared axis list"
+        )
+    else:
+        ok("full-review.js declares exactly the shared axes")
+
+
+def _frames_expecting_a_checklist() -> list[str]:
+    """The frames that defer half their definition to the consuming repo.
+
+    Read from the frames themselves: a frame states the path it wants, and
+    `check_layer_a_composition` has already proved that path is its own name.
+    """
+    agents_dir = ROOT / PLUGIN_DIR / "agents"
+    return sorted(
+        p.stem
+        for p in agents_dir.glob("*.md")
+        if "docs/agents/subagents/" in p.read_text(encoding="utf-8")
+    )
+
+
+def check_stack_configs() -> None:
+    """`harness.config.json` is the contract; a stack that breaks it breaks layer A.
+
+    Only the meta-repo can run this: the schema lives here and the configs live in the
+    submodules, and nothing inside either stack can see both. A stack that has not adopted
+    the config yet is reported as such rather than passed over in silence -- the whole
+    point of the file is that the shared half stops working without it.
+    """
+    print("stack configs")
+    for name in ("python-harness", "frontend-harness"):
+        stack = ROOT / name
+        if not stack.exists():
+            print(f"  skip {name} is not checked out -- run `git submodule update --init`")
+            continue
+        config_path = stack / "harness.config.json"
+        if not config_path.exists():
+            print(f"  skip {name} has no harness.config.json yet")
+            continue
+        try:
+            config = json.loads(config_path.read_text())
+        except json.JSONDecodeError as exc:
+            fail(f"{name}/harness.config.json does not parse: {exc}")
+            continue
+
+        for key in ("name", "gates"):
+            if key not in config:
+                fail(f"{name}: harness.config.json has no {key!r}")
+        gates = config.get("gates") or []
+        if not gates:
+            fail(f"{name}: declares no gates -- /lint, /test and /verify have nothing to run")
+        for gate in gates:
+            kind = gate.get("kind")
+            if kind not in GATE_KINDS:
+                fail(f"{name}: gate {gate.get('name')!r} has kind {kind!r}")
+            if not isinstance(gate.get("run"), list) or not gate.get("run"):
+                fail(f"{name}: gate {gate.get('name')!r} has no argv in `run`")
+        if not any(g.get("kind") in {"lint", "format", "types"} for g in gates):
+            fail(f"{name}: no lint, format or types gate -- /lint would run nothing")
+        if not any(g.get("kind") == "test" for g in gates):
+            fail(f"{name}: no test gate -- /test would run nothing")
+
+        review = config.get("review", {})
+        checklist_dir = stack / review.get("checklistDir", "docs/agents/subagents")
+        # Which agents need a checklist is a property of the frames, not a list kept here.
+        # A frame that carries its whole review needs none; one that defers to the stack
+        # cannot work without it. Restating the set would put the two out of step the first
+        # time a frame changed its mind.
+        expected = _frames_expecting_a_checklist()
+        absent = [a for a in expected if not (checklist_dir / f"{a}.md").exists()]
+        if absent:
+            fail(
+                f"{name}: no checklist for {', '.join(absent)} under "
+                f"{checklist_dir.relative_to(stack)} -- those axes review on the frame alone"
+            )
+        else:
+            ok(f"{name}: all {len(expected)} frames that need a checklist have one")
+
+        ninth = review.get("ninthAxis")
+        if ninth:
+            agent_dir = stack / review.get("agentDir", ".agents/agents")
+            if not (agent_dir / f"{ninth['agent']}.md").exists():
+                fail(
+                    f"{name}: ninth axis {ninth['agent']!r} has no definition under "
+                    f"{agent_dir.relative_to(stack)}"
+                )
+            else:
+                ok(f"{name}: ninth axis {ninth['label']} resolves")
+        if not gates:
+            continue
+        ok(f"{name}: {len(gates)} gate(s) declared")
+
+
 def check_version_bump(base: str) -> None:
     """Layer A content must never change without the plugin version changing with it.
 
@@ -368,9 +629,12 @@ def main() -> int:
     check_manifests()
     if not manifests_only:
         check_vendor_round_trip()
+        check_vendor_freshness()
         check_generated_tree()
         check_shared_generator()
         check_submodule_guard()
+        check_layer_a_composition()
+        check_stack_configs()
         if base:
             check_version_bump(base)
     print()

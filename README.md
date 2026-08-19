@@ -39,11 +39,27 @@ python3 .../vendor_sync.py check --target . --harness /path/to/harness
 
 ## What is in it
 
-`plugins/harness/docs/agents/` — how agents work with the issue tracker, the triage label
-mapping, how to consume a repo's domain documentation, and secret-handling doctrine.
+| Path                           | What                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `plugins/harness/agents/`      | Eight shared review frames — standards, spec, security, tests, simplicity, design, speed, cost — plus `explorer`      |
+| `plugins/harness/commands/`    | The eight workflow commands: `/arch` `/context` `/implement-from-plan` `/lint` `/plan` `/retro` `/run` `/test`        |
+| `plugins/harness/skills/`      | `full-review`, `verify`, `loop-goal`, `prune-rules`, `search-second-brain`, each with an `agents/openai.yaml` sidecar |
+| `plugins/harness/workflows/`   | `full-review.js` — the fan-out runner                                                                                 |
+| `plugins/harness/schema/`      | The `harness.config.json` contract                                                                                    |
+| `plugins/harness/docs/agents/` | Issue tracker, triage labels, domain docs, secrets, testing and config doctrine                                       |
 
-Commands, reviewer agents, shared skills, `full-review.js` and the unified hooks arrive in
-later phases.
+The unified hooks arrive in phase 5.
+
+### Every consuming repo declares one file
+
+Layer A never names a toolchain, a directory or a team key. It reads them from
+`harness.config.json` at the consuming repository's root — the gates, the dev server, and
+which reviewer checklists to compose in. `plugins/harness/schema/` is the contract and
+`plugins/harness/docs/agents/config.md` is why it looks like that.
+
+A reviewer is half a definition here and half in the stack: the frame is shared, the
+checklist at `docs/agents/subagents/<agent>.md` is the stack's. `full-review.js` joins
+them, and refuses to run an axis that resolves to neither.
 
 ## Both stacks are mounted here, for reading
 
