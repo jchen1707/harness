@@ -28,10 +28,17 @@ from pathlib import Path
 # `agents/` and `workflows/` are the two Claude Code reads natively from a plugin; a
 # harness that does not read them still gets the files, because the neutral carrier for
 # the same content -- the `full-review` skill -- resolves the frames by path.
+#
+# `hooks/` is the one entry that is executable rather than read. Claude Code loads it from
+# the plugin at `${CLAUDE_PLUGIN_ROOT}`, which resolves in a worktree and a sandbox; every
+# other harness runs the vendored copy by repo-relative path, wired in that repo's own hook
+# config. The test suite is vendored with it deliberately -- a stack that runs shared code
+# it cannot test is a stack that finds out about a regression from its own users.
 VENDORED = (
     "agents",
     "commands",
     "docs/agents",
+    "hooks",
     "schema",
     "skills",
     "workflows",
