@@ -11,7 +11,7 @@ two adapters that deliver it. Nothing here runs against a product codebase.
 | Layer | What it is | Where it lives |
 | --- | --- | --- |
 | **A — stack-neutral** | Shared reviewers, skills, commands, `full-review.js`, `docs/agents/` | **Here.** Generated into consumers, never edited there. |
-| **B — stack-specific** | Gates, hook config, `docs/architecture.md`, path-scoped `AGENTS.md` | `python-harness` / `frontend-harness`. Diverges on purpose. |
+| **B — stack-specific** | Gates, hook config, `docs/architecture.md`, path-scoped `CLAUDE.md` | `python-harness` / `frontend-harness`. Diverges on purpose. |
 | **C — the product** | An actual application | A scaffolded product repo. |
 
 If a file states a fact true in only one stack — a team key, a directory layout, a toolchain —

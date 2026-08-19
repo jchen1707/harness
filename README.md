@@ -47,4 +47,4 @@ later phases.
 
 ## Branches
 
-`v2` is authored. `main` is generated from it and must never be hand-edited. See `AGENTS.md`.
+`v2` is authored. `main` is generated from it and must never be hand-edited. See `CLAUDE.md`.

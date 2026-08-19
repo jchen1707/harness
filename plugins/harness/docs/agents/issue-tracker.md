@@ -21,18 +21,6 @@ state. There is no per-repo API key to manage.
   effect until you restart.
 - If tools are missing, confirm that `docker mcp gateway run` works in the harness host.
 
-<!-- harness:agnostic -->
-- Trust the project before Codex can load `.codex/config.toml`.
-- Where the sandbox runtime supplies Linear instead of the Toolkit, register the remote server
-  once on the host and start sandboxes with `--static-mcp linear`:
-
-  ```sh
-  sbx mcp add linear --url https://mcp.linear.app/mcp
-  ```
-
-  Sandbox injection changes require a new session. Never add the credential to a repository.
-<!-- /harness:agnostic -->
-
 ### The connection is shared, and the workspace selection is global
 
 Docker MCP Toolkit shares its Linear connection with every attached client. Another

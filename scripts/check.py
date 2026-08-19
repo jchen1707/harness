@@ -160,8 +160,8 @@ def check_generated_tree() -> None:
             return
         ok("generator builds a main tree")
 
-        if (out / "AGENTS.md").exists():
-            fail("generated main still carries AGENTS.md")
+        if (out / "CLAUDE.md").exists():
+            fail("generated main still carries CLAUDE.md")
         elif not (out / "CLAUDE.md").exists():
             fail("generated main has no CLAUDE.md")
         else:
