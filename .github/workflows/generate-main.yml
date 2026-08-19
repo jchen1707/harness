@@ -85,4 +85,6 @@ jobs:
           # The lease refuses the push when `main` moved after this job read it, which is
           # the signal that somebody edited the artifact by hand and their work is about to
           # be overwritten.
-          git push --force-with-lease origin HEAD:main
+          # Fully qualified: on the very first run `main` does not exist yet, and git
+          # refuses to guess a destination ref it cannot already see.
+          git push --force-with-lease origin HEAD:refs/heads/main
