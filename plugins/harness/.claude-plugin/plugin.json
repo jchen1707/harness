@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Stack-neutral agent-harness layer: the shared enforcement hooks, the eight workflow commands, the shared review axes and skills, and the full-review fan-out, plus issue-tracker, triage, domain and secret-handling doctrine. Every stack fact it needs -- gates, gated paths, protected files, formatters -- comes from the consuming repo's harness.config.json.",
   "author": {
     "name": "jchen1707"
