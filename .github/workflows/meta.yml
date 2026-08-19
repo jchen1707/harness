@@ -1,0 +1,52 @@
+# The meta-repo's own consistency.
+#
+# `harness` mounts both stacks as submodules so that onboarding, cross-stack review and
+# one CI job can see both worlds at once. The submodules are for **reading** — layer A
+# reaches the stacks as a plugin or a vendored tree, never through a gitlink, because
+# `git worktree add` leaves a submodule directory empty with no error and both stacks
+# run worktree-per-ticket.
+#
+# What a meta-repo can get wrong is the mounting itself: a pin at a commit no branch
+# contains, a `.gitmodules` whose region markers resolved to the wrong branch, a
+# submodule that stopped resolving at all. None of that is visible from inside either
+# stack, and none of it is visible from this repo without checking out the children.
+name: Meta
+
+on:
+  push:
+    branches: [v2]
+  pull_request:
+    branches: [v2]
+
+permissions:
+  contents: read
+
+jobs:
+  submodules:
+    # Two shallow clones and a handful of git plumbing. Nothing here is slow, and a job
+    # with no timeout inherits GitHub's 360-minute default, which is not a limit.
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # `--pins` asks whether each pinned commit is still on the branch `.gitmodules`
+      # names, which needs that branch present inside the submodule. The checkout above
+      # fetches the pinned commit and nothing else.
+      - name: Fetch the branch each submodule is pinned to
+        run: |
+          set -euo pipefail
+          for key in $(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$'); do
+            name="${key#submodule.}"
+            name="${name%.path}"
+            link="$(git config -f .gitmodules --get "submodule.${name}.path")"
+            branch="$(git config -f .gitmodules --get "submodule.${name}.branch")"
+            git -C "$link" fetch --quiet origin "${branch}:refs/remotes/origin/${branch}"
+          done
+
+      # No setup step, by design — the checks are stdlib-only Python, like everything
+      # else in this repo.
+      - name: The submodules match this ref
+        run: python3 scripts/check_submodules.py --pins

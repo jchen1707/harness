@@ -1,7 +1,8 @@
 {
   "drop": [
     ".agents",
-    ".github/workflows/generate-main.yml"
+    ".github/workflows/generate-main.yml",
+    ".github/workflows/meta.yml"
   ],
   "instructions": {
     "from": "AGENTS.md",

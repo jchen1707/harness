@@ -45,6 +45,25 @@ mapping, how to consume a repo's domain documentation, and secret-handling doctr
 Commands, reviewer agents, shared skills, `full-review.js` and the unified hooks arrive in
 later phases.
 
+## Both stacks are mounted here, for reading
+
+```sh
+git clone --recursive https://github.com/jchen1707/harness.git
+git config submodule.recurse true    # in the clone; see below
+```
+
+`python-harness/` and `frontend-harness/` are submodules so that one clone gives you both
+worlds — onboarding, cross-stack review, and a CI job that can compare the two.
+
+**They are read-only. A stack's work is never committed through this repo.** Clone the
+stack, branch there, open the PR there. Layer A does not travel this way either: it
+arrives as the plugin or as a vendored tree, because `git worktree add` leaves a submodule
+directory empty with no error and both stacks run worktree-per-ticket.
+
+`git checkout` does not move a submodule's working tree, so without `submodule.recurse`
+you can stand on `v2` and read the stacks' `main`. `scripts/check_submodules.py` runs on
+`SessionStart` and in CI and says so when it happens.
+
 ## Branches
 
 `v2` is authored. `main` is generated from it and must never be hand-edited. See `AGENTS.md`.
