@@ -58,6 +58,18 @@ to `enhancement` — applying both puts two categories on one issue and breaks t
 `Feature` is the single `enhancement` target. `Improvement`, and any other synonym the
 workspace acquires, stays available for manual use and is never applied by triage.
 
+## When a label in the table is missing
+
+Listing the labels can turn up a role with nothing to map to — a fresh workspace, or a label
+somebody removed. Create it rather than improvising: a triaged issue carries exactly one
+category and one state role, so silently skipping the missing one leaves the issue outside
+the mapping and every later query that filters on it misses the issue entirely.
+
+Create it with the exact string in the table above, in the same group (`Triage` for a state
+role, ungrouped for a category), and say in the session report that you created it. Do not
+substitute the nearest existing label — that is how a second `enhancement` synonym gets into
+the workspace, which is the problem the section above exists to prevent.
+
 ## Editing labels needs the Linear UI
 
 The Linear MCP server exposes `create_issue_label` but **no update or delete** for labels.
