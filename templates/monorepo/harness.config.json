@@ -4,11 +4,6 @@
   "hooks": {
     "protected": [
       {
-        "glob": "packages/contracts/**",
-        "why": "the contract is the seam both apps answer to - change it in a ticket of its own, and regenerate the types on both sides",
-        "scope": "write"
-      },
-      {
         "glob": ".agents/vendor/**",
         "why": "layer A is generated and pinned by sha; edit it in the harness repo and re-sync",
         "scope": "write"
