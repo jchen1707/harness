@@ -38,9 +38,10 @@ The Markdown indexes above are the ones for you.
 **Never write to the vault from this skill.** It reads. The hook writes. Keeping those apart is
 what stops a search from quietly editing the thing it was searching.
 
-**Read `docs/agents/second-brain.md` in this repository** for which sessions rebuild the
-indexes. That answer decides how far behind they can be when you read them, and therefore how
-much weight step 2 has to carry.
+**Read `docs/agents/second-brain.md` in this repository** for anything the vault holds that is
+specific to it. Which sessions rebuild the indexes is no longer such a fact: the writer and both
+indexers are shared, so a session ending in any repository that installs this harness rebuilds
+them.
 
 ## Method
 
@@ -116,19 +117,25 @@ hard-won conclusions, and blurring that makes the second brain untrustworthy.
 
 Offer the alternative instead: answer from first principles, clearly labelled as such.
 
-## One indexer, not one per repository
+## One indexer, and it is this one
 
-Read this before you propose fixing an index lag by adding an indexer here. **Do not add one.**
+Read this before you propose adding an indexer to a repository. **Do not add one.**
 
-An indexer in every repository is one artifact with several writers. One of these repositories
-shipped a port of the other's indexer for exactly one day. In that time the pair re-diverged on
-a header line inside a single fix cycle — with only one side under test, because neither
-repository's suite can see the other's output. Tests can pin a contract between two
-implementations. They cannot stop the two from disagreeing about what a description should say.
-Deleting the second implementation removes the failure mode instead of guarding it.
+An indexer in every repository is one artifact with several writers. One repository shipped a
+port of another's indexer for exactly one day. In that time the pair re-diverged on a header
+line inside a single fix cycle — with only one side under test, because neither repository's
+suite can see the other's output. Tests can pin a contract between two implementations. They
+cannot stop the two from disagreeing about what a description should say.
 
-Where that leaves a lag, the cost is stated plainly in `docs/agents/second-brain.md`, and the
-grep in step 2 is what makes it a degraded search rather than a silently truncated one.
+For a while the answer was to keep the single implementation in one repository, which bought
+correctness at the price of a lag: notes written from anywhere else were unindexed until a
+session happened to end in the repository that owned the indexer. That trade is over. The
+indexer is here, in the shared layer, so every repository runs the same one and none of them
+owns it. There is no lag to work around and no second implementation to disagree with.
+
+The grep in step 2 is still not optional, for the reason that survives: a note added by hand in
+Obsidian between sessions is unindexed until the next session ends anywhere. That is a normal
+state, not an edge case.
 
 ## Escalating a pattern
 

@@ -47,8 +47,12 @@ python3 .../vendor_sync.py check --target . --harness /path/to/harness
 | `plugins/harness/workflows/`   | `full-review.js` — the fan-out runner                                                                                 |
 | `plugins/harness/schema/`      | The `harness.config.json` contract                                                                                    |
 | `plugins/harness/docs/agents/` | Issue tracker, triage labels, domain docs, secrets, testing and config doctrine                                       |
+| `plugins/harness/hooks/`       | The four enforcement hooks — write guard, secret guard, formatter, Stop gate — plus the distiller and their suite     |
 
-The unified hooks arrive in phase 5.
+The hooks are the one part of layer A that is executable rather than read. Claude Code loads
+them from the plugin at `${CLAUDE_PLUGIN_ROOT}`, which resolves the same in a main checkout,
+a `git worktree` and a sandbox. Every other harness runs the vendored copy by repo-relative
+path. `node --test plugins/harness/hooks/hooks.test.mjs` runs their suite anywhere Node 22 is.
 
 ### Every consuming repo declares one file
 
