@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "harness",
+  "description": "The stack-neutral half of the python-harness and frontend-harness agent harnesses, owned once and delivered as a plugin.",
+  "owner": {
+    "name": "jchen1707"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "description": "Stack-neutral agent-harness layer: issue tracker conventions, triage label mapping, domain-doc consumption rules and secret-handling doctrine, shared by every harness repo.",
+      "author": {
+        "name": "jchen1707"
+      },
+      "source": "./plugins/harness",
+      "category": "development",
+      "homepage": "https://github.com/jchen1707/harness/tree/main/plugins/harness"
+    }
+  ]
+}

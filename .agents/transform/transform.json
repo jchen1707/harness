@@ -1,0 +1,23 @@
+{
+  "drop": [
+    ".agents",
+    ".github/workflows/generate-main.yml"
+  ],
+  "instructions": {
+    "from": "AGENTS.md",
+    "to": "CLAUDE.md"
+  },
+  "blocks": [],
+  "substitutions": [
+    {
+      "note": "Article agreement: \"an AGENTS.md\" would otherwise become \"an CLAUDE.md\". Must precede the rule below, which would consume the noun first.",
+      "regex": "\\ban(\\s+`?)AGENTS\\.md",
+      "to": "a\\1CLAUDE.md"
+    },
+    {
+      "note": "The instruction file itself, in prose and in glob patterns.",
+      "regex": "\\bAGENTS\\.md\\b",
+      "to": "CLAUDE.md"
+    }
+  ]
+}
