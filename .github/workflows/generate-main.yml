@@ -30,8 +30,18 @@ jobs:
       # No setup step, by design: the generator and the gates are stdlib-only Python so
       # that the same files run unchanged in the Node consuming repo, which has no Python
       # toolchain of its own.
+      # `--since` compares against what this ref is changing, so the version-bump gate
+      # knows whether layer A actually moved. On a PR that is the base commit; on a push
+      # to `v2` it is the previous tip.
       - name: Gate this ref
-        run: python3 scripts/check.py
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"; fi
+          if [ -n "$base" ]; then
+            python3 scripts/check.py --since="$base"
+          else
+            python3 scripts/check.py
+          fi
 
       - name: Build the main tree from this ref
         run: python3 .agents/transform/generate_main.py . "${RUNNER_TEMP}/main"
