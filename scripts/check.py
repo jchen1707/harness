@@ -33,6 +33,7 @@ def _root() -> Path:
 
 ROOT = _root()
 VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
+PLUGIN_DIR = "plugins/harness"
 failures: list[str] = []
 
 
@@ -182,16 +183,64 @@ def check_generated_tree() -> None:
             ok("agnostic regions resolved out of main")
 
 
+def check_version_bump(base: str) -> None:
+    """Layer A content must never change without the plugin version changing with it.
+
+    `claude plugin update` compares the `version` field, not the commit sha. A content
+    change shipped under an unchanged version reports "already at the latest version" and
+    never reaches the cache a session actually reads -- silently, which is the whole failure
+    mode this repo exists to remove. The vendored adapter shouts when it is stale; without
+    this gate the plugin adapter does not.
+    """
+    print(f"version bump (vs {base})")
+    changed = run(["git", "diff", "--name-only", base, "--", PLUGIN_DIR], cwd=ROOT)
+    if changed.returncode != 0:
+        fail(f"could not diff against {base}: {changed.stderr.strip()}")
+        return
+
+    touched = [f for f in changed.stdout.split("\n") if f.strip()]
+    if not touched:
+        ok("no layer A change in this ref")
+        return
+
+    content = [f for f in touched if not f.endswith("plugin.json")]
+    if not content:
+        ok("only the manifest changed")
+        return
+
+    before = run(["git", "show", f"{base}:{PLUGIN_DIR}/.claude-plugin/plugin.json"], cwd=ROOT)
+    if before.returncode != 0:
+        ok("no baseline manifest -- treating as the first release")
+        return
+
+    was = json.loads(before.stdout).get("version")
+    now = json.loads((ROOT / PLUGIN_DIR / ".claude-plugin" / "plugin.json").read_text()).get("version")
+    if was == now:
+        fail(
+            f"{len(content)} layer A file(s) changed but version is still {now!r}. "
+            f"Consumers would be told they are already up to date. Bump it."
+        )
+        for f in content:
+            print(f"       {f}")
+    else:
+        ok(f"version {was} -> {now} for {len(content)} changed file(s)")
+
+
 def main() -> int:
     # `main` is built without `.agents/`, so the generator is not present in that tree and
     # the round-trip and generation checks cannot run there. The manifests are the part
     # that still has to hold, because they are what the marketplace reads.
     manifests_only = "--manifests-only" in sys.argv
+    base = next(
+        (a.split("=", 1)[1] for a in sys.argv if a.startswith("--since=")), None
+    )
 
     check_manifests()
     if not manifests_only:
         check_vendor_round_trip()
         check_generated_tree()
+        if base:
+            check_version_bump(base)
     print()
     if failures:
         print(f"{len(failures)} check(s) failed")
