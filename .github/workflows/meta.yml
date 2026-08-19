@@ -82,11 +82,13 @@ jobs:
         with:
           version: 10
 
+      # No dependency cache. `setup-node`'s pnpm cache wants a store path that does not
+      # exist until something installs, and it fails the job in post-cleanup when it is
+      # missing — a red tick for a reason unrelated to anything this job checks. The gates
+      # here are seconds; the cache was never worth a failure mode.
       - uses: actions/setup-node@v4
         with:
           node-version-file: frontend-harness/.nvmrc
-          cache: pnpm
-          cache-dependency-path: frontend-harness/pnpm-lock.yaml
 
       - name: Layer A on this branch passes both stacks' gates
         run: python3 scripts/cross_stack.py
