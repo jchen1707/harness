@@ -21,7 +21,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# When gating a *generated* tree, this script is invoked from the source checkout while
+# the working directory is the built tree. Prefer the working directory when it looks like
+# a harness root, so the manifests that get checked are the built ones.
+def _root() -> Path:
+    here = Path.cwd()
+    if (here / ".claude-plugin" / "marketplace.json").exists():
+        return here
+    return Path(__file__).resolve().parent.parent
+
+
+ROOT = _root()
 VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
 failures: list[str] = []
 
@@ -173,9 +183,15 @@ def check_generated_tree() -> None:
 
 
 def main() -> int:
+    # `main` is built without `.agents/`, so the generator is not present in that tree and
+    # the round-trip and generation checks cannot run there. The manifests are the part
+    # that still has to hold, because they are what the marketplace reads.
+    manifests_only = "--manifests-only" in sys.argv
+
     check_manifests()
-    check_vendor_round_trip()
-    check_generated_tree()
+    if not manifests_only:
+        check_vendor_round_trip()
+        check_generated_tree()
     print()
     if failures:
         print(f"{len(failures)} check(s) failed")
