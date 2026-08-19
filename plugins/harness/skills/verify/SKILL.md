@@ -13,8 +13,14 @@ deliberately skips.
 
 ## Gates
 
-Run every gate whose `kind` is `lint`, `format`, `types` or `test`, in the order they are
-listed, using the `run` argv exactly as written. Run `install` first if dependencies changed.
+Run every gate whose `kind` is `lint`, `format`, `types`, `build` or `test`, in the order
+they are listed, using the `run` argv exactly as written. Run `install` first if dependencies
+changed.
+
+`build` is in that list and not in `/lint`'s for a reason: it is usually the only gate that
+checks the deployment target, so a construct the type checker accepts and the target does not
+reaches CI green from every faster gate. It is also slow, which is why the inner loop skips it
+and this does not.
 
 **Stop at the first failure.** A later gate's output is meaningless once an earlier one
 failed, and running on produces a wall of noise that buries the one line that mattered.

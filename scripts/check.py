@@ -120,8 +120,19 @@ def check_vendor_round_trip() -> None:
         target = Path(tmp) / "consumer"
         target.mkdir()
 
+        # Against a clone at HEAD, not this working tree. Two reasons: a consumer only ever
+        # receives committed content, so that is what the round-trip should exercise; and
+        # `sync` now refuses a dirty checkout, which would otherwise make this gate
+        # unrunnable for the one person most likely to want it -- somebody midway through
+        # editing layer A.
+        source = Path(tmp) / "harness"
+        cloned = run(["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(source)], cwd=ROOT)
+        if cloned.returncode != 0:
+            fail(f"could not clone the harness for the round-trip: {cloned.stderr.strip()}")
+            return
+
         synced = run(
-            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(ROOT), "--target", str(target)],
+            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source), "--target", str(target)],
             cwd=ROOT,
         )
         if synced.returncode != 0:
@@ -155,6 +166,24 @@ def check_vendor_round_trip() -> None:
             fail("check passes on a hand-edited vendored file -- drift would go unnoticed")
         else:
             ok("check catches a hand-edited vendored file")
+
+        # A sync from a dirty checkout would pin a sha whose content exists nowhere. Dirty
+        # the clone rather than this checkout: a gate that edits the repository it is
+        # gating has a failure mode of its own.
+        scratch = source / PLUGIN_DIR / "docs" / "agents" / ".check-dirty.md"
+        scratch.write_text("uncommitted\n")
+        dirty = run(
+            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source),
+             "--target", str(target)],
+            cwd=ROOT,
+        )
+        scratch.unlink()
+        if dirty.returncode == 0:
+            fail("sync accepts a dirty harness checkout -- the pin would name content that is not in it")
+        elif "uncommitted" not in dirty.stderr + dirty.stdout:
+            fail("sync refused a dirty checkout but did not say why")
+        else:
+            ok("sync refuses a dirty harness checkout")
 
         # And a file that layer A does not ship must not survive a sync.
         stray = vendored / "stray.md"
@@ -407,7 +436,7 @@ SHARED_AXES = (
     "perf-reviewer",
     "cost-reviewer",
 )
-GATE_KINDS = {"lint", "format", "types", "test", "e2e", "integration"}
+GATE_KINDS = {"lint", "format", "types", "build", "test", "e2e", "integration"}
 
 
 def check_layer_a_composition() -> None:
@@ -459,6 +488,20 @@ def check_layer_a_composition() -> None:
         ok("full-review.js declares exactly the shared axes")
 
 
+def _frames_expecting_a_checklist() -> list[str]:
+    """The frames that defer half their definition to the consuming repo.
+
+    Read from the frames themselves: a frame states the path it wants, and
+    `check_layer_a_composition` has already proved that path is its own name.
+    """
+    agents_dir = ROOT / PLUGIN_DIR / "agents"
+    return sorted(
+        p.stem
+        for p in agents_dir.glob("*.md")
+        if "docs/agents/subagents/" in p.read_text(encoding="utf-8")
+    )
+
+
 def check_stack_configs() -> None:
     """`harness.config.json` is the contract; a stack that breaks it breaks layer A.
 
@@ -502,14 +545,19 @@ def check_stack_configs() -> None:
 
         review = config.get("review", {})
         checklist_dir = stack / review.get("checklistDir", "docs/agents/subagents")
-        absent = [a for a in SHARED_AXES if not (checklist_dir / f"{a}.md").exists()]
+        # Which agents need a checklist is a property of the frames, not a list kept here.
+        # A frame that carries its whole review needs none; one that defers to the stack
+        # cannot work without it. Restating the set would put the two out of step the first
+        # time a frame changed its mind.
+        expected = _frames_expecting_a_checklist()
+        absent = [a for a in expected if not (checklist_dir / f"{a}.md").exists()]
         if absent:
             fail(
                 f"{name}: no checklist for {', '.join(absent)} under "
                 f"{checklist_dir.relative_to(stack)} -- those axes review on the frame alone"
             )
         else:
-            ok(f"{name}: every shared axis has a checklist")
+            ok(f"{name}: all {len(expected)} frames that need a checklist have one")
 
         ninth = review.get("ninthAxis")
         if ninth:

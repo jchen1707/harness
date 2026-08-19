@@ -65,8 +65,8 @@
             "minLength": 1
           },
           "kind": {
-            "enum": ["lint", "format", "types", "test", "e2e", "integration"],
-            "description": "What the gate checks. /lint runs lint+format+types, /test runs test, and e2e and integration are opt-in \u2014 they need a browser or a container and are not part of the default local loop."
+            "enum": ["lint", "format", "types", "build", "test", "e2e", "integration"],
+            "description": "What the gate checks. /lint runs lint, format and types \u2014 the fast ones a turn can afford. /test runs test. /verify runs all of those plus build, because a build is the only gate that sees the deployment target and is too slow for the inner loop. e2e and integration are opt-in: they need a browser or a container, and their `when` clause says when they stop being optional."
           },
           "run": {
             "$ref": "#/$defs/argv"

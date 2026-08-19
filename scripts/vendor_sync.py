@@ -120,7 +120,39 @@ def head_content(harness: Path, ref: str) -> dict[str, str]:
     return out
 
 
+def assert_clean(harness: Path) -> None:
+    """Refuse to vendor from a harness checkout with uncommitted layer A.
+
+    `sync` copies the working tree but records `HEAD` as the pin. From a dirty checkout
+    those disagree: the consumer gets content that exists nowhere in history, under a sha
+    that claims otherwise, and every freshness check afterwards compares against the
+    committed tree and reports a stale pin the consumer cannot fix by syncing.
+
+    That is precisely the silent staleness the pin exists to make loud, arriving through
+    the tool meant to prevent it. Copying from the ref instead would be the other repair,
+    but it would let a sync succeed from a checkout whose author believes they are testing
+    their edit -- a quieter failure than this one.
+    """
+    dirty = subprocess.run(  # noqa: S603
+        ["git", "status", "--porcelain", "--", PLUGIN_ROOT],
+        cwd=harness,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if dirty.returncode == 0 and dirty.stdout.strip():
+        listing = "\n".join(f"  {line}" for line in dirty.stdout.strip().split("\n"))
+        raise SystemExit(
+            "refusing to sync: layer A has uncommitted changes in the harness checkout.\n"
+            f"{listing}\n"
+            "The pin would name HEAD while the files came from the working tree, and every "
+            "freshness check afterwards would call the consumer stale with no way to fix it. "
+            "Commit first."
+        )
+
+
 def cmd_sync(harness: Path, target: Path) -> int:
+    assert_clean(harness)
     files = source_files(harness)
     if not files:
         raise SystemExit(f"no layer A files found under {harness / PLUGIN_ROOT}")

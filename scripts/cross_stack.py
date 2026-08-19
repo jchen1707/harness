@@ -35,7 +35,7 @@ VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
 # Kinds that run without a browser, a container or a network. The rest are opt-in in the
 # stack's own CI too, and standing them up here would mean this job reimplementing each
 # stack's service setup -- the drift the whole file is written to avoid.
-DEFAULT_KINDS = frozenset({"lint", "format", "types", "test"})
+DEFAULT_KINDS = frozenset({"lint", "format", "types", "build", "test"})
 
 
 def run(args: list[str], cwd: Path) -> int:
