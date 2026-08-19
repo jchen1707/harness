@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CONFIG_NAME,
+  configChain,
   findConfig,
   globToRegExp,
   loadConfig,
@@ -39,10 +40,23 @@ import {
   allowedFor,
   blockReason,
   commandReason,
+  guardedReason,
+  guardsFor,
+  repoConfigs,
   rulesFor,
+  scopedPath,
+  secretVarsFor,
 } from './protect_paths.mjs';
-import { commandsFor } from './format_edited.mjs';
-import { STOP_KINDS, gatedChange, isGated, porcelainPath, skippedNote } from './verify.mjs';
+import { commandsFor, formatPlan } from './format_edited.mjs';
+import {
+  STOP_KINDS,
+  dispatch,
+  gatedChange,
+  isGated,
+  missingNote,
+  porcelainPath,
+  skippedNote,
+} from './verify.mjs';
 import {
   DISTILLER_MARKER,
   LEGACY_OPENINGS,
@@ -207,6 +221,29 @@ describe('config discovery', () => {
 
   it('finds nothing rather than walking past the filesystem root', () => {
     assert.equal(findConfig(scratch()), '');
+  });
+
+  it('collects the whole chain, nearest first, so a root rule survives an app config', () => {
+    const root = scratch();
+    const app = join(root, 'apps', 'web', 'src');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(root, CONFIG_NAME), '{"name":"root","gates":[]}', 'utf8');
+    writeFileSync(join(root, 'apps', 'web', CONFIG_NAME), '{"name":"web","gates":[]}', 'utf8');
+
+    assert.deepEqual(configChain(app, root), [
+      join(root, 'apps', 'web', CONFIG_NAME),
+      join(root, CONFIG_NAME),
+    ]);
+  });
+
+  it('stops at the project directory rather than inheriting from whatever sits above it', () => {
+    const outer = scratch();
+    const project = join(outer, 'project');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(outer, CONFIG_NAME), '{"name":"outer","gates":[]}', 'utf8');
+    writeFileSync(join(project, CONFIG_NAME), '{"name":"project","gates":[]}', 'utf8');
+
+    assert.deepEqual(configChain(project, project), [join(project, CONFIG_NAME)]);
   });
 });
 
@@ -484,6 +521,198 @@ function gatedChangeWith(runner, hooks) {
     .map(porcelainPath)
     .some((path) => isGated(path, hooks));
 }
+
+/**
+ * The shape phase 6 scaffolds, reduced to what the hooks read: a router config at the root
+ * that names its apps and declares nothing to run, and one config per app carrying that
+ * app's own Definition of Done.
+ *
+ * `../../packages/contracts` in both apps' `gatedPaths` is the whole monorepo argument in
+ * one line — the contract belongs to neither app, so a change to it puts both back in
+ * scope, and no new key was needed to say so.
+ */
+const ROUTER = {
+  name: 'acme-portal',
+  apps: ['apps/api', 'apps/web'],
+  hooks: {
+    gatedFiles: ['harness.config.json'],
+    protected: [
+      { glob: 'packages/contracts/**', why: 'generated from the api schema', scope: 'write' },
+    ],
+    secretVars: ['LINEAR_API_KEY'],
+  },
+};
+
+const API = {
+  name: 'api',
+  gates: [{ name: 'pytest', kind: 'test', run: ['uv', 'run', 'pytest'] }],
+  hooks: {
+    gatedPaths: ['src', 'tests', '../../packages/contracts'],
+    gatedExtensions: ['.py'],
+    protected: [{ glob: 'uv.lock', why: 'regenerate with `uv lock`', scope: 'write' }],
+    secretVars: ['DATABASE_URL'],
+    formatters: [{ match: ['.py'], run: [['uv', 'run', 'ruff', 'format']] }],
+  },
+};
+
+const WEB = {
+  name: 'web',
+  gates: [{ name: 'vitest', kind: 'test', run: ['pnpm', 'test'] }],
+  hooks: {
+    gatedPaths: ['src', '../../packages/contracts'],
+    gatedExtensions: ['.ts', '.tsx'],
+    formatters: [{ match: ['.ts', '.tsx'], run: [['pnpm', 'exec', 'prettier', '--write']] }],
+  },
+};
+
+/** A throwaway repository whose configs sit where the map says. */
+function repoWith(configs) {
+  const dir = scratch();
+  for (const [relative, config] of Object.entries(configs)) {
+    const path = relative ? join(dir, relative, CONFIG_NAME) : join(dir, CONFIG_NAME);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(config), 'utf8');
+  }
+  return dir;
+}
+
+const MONOREPO = { '': ROUTER, 'apps/api': API, 'apps/web': WEB };
+
+describe('monorepo dispatch — one verify, gates per app', () => {
+  it('runs one gate set per app and leaves a router config out of it', () => {
+    const root = repoWith(MONOREPO);
+    const { targets, missing } = dispatch(loadConfig(root));
+
+    assert.deepEqual(
+      targets.map((target) => target.name),
+      ['api', 'web'],
+    );
+    assert.deepEqual(missing, []);
+  });
+
+  it('keeps a single-config repo exactly as it was, with no dispatch at all', () => {
+    for (const config of Object.values(LOADED)) {
+      const { targets, missing } = dispatch(config);
+      assert.deepEqual(targets, [config]);
+      assert.deepEqual(missing, []);
+    }
+  });
+
+  it('runs the root first when the root has gates of its own', () => {
+    const root = repoWith({
+      ...MONOREPO,
+      '': { ...ROUTER, gates: [{ name: 'prettier', kind: 'format', run: ['pnpm', 'format'] }] },
+    });
+    const { targets } = dispatch(loadConfig(root));
+    assert.deepEqual(
+      targets.map((target) => target.name),
+      ['acme-portal', 'api', 'web'],
+    );
+  });
+
+  it('reports an app with no config rather than running the root gates from its directory', () => {
+    const root = repoWith({ '': ROUTER, 'apps/api': API });
+    mkdirSync(join(root, 'apps', 'web'), { recursive: true });
+    const { targets, missing } = dispatch(loadConfig(root));
+
+    assert.deepEqual(
+      targets.map((target) => target.name),
+      ['api'],
+    );
+    assert.deepEqual(missing, ['apps/web']);
+    assert.match(missingNote(missing), /apps\/web/);
+    assert.equal(missingNote([]), '');
+  });
+
+  it("runs each app's gates in that app's own directory", () => {
+    const root = repoWith(MONOREPO);
+    const { targets } = dispatch(loadConfig(root));
+    assert.deepEqual(
+      targets.map((target) => relativePath(target.root, root)),
+      ['apps/api', 'apps/web'],
+    );
+  });
+});
+
+describe('monorepo formatting — the file decides, not the session', () => {
+  it("formats a Python file with the api's formatters and a tsx file with the web's", () => {
+    const root = repoWith(MONOREPO);
+
+    const python = formatPlan(join(root, 'apps', 'api', 'src', 'main.py'), root);
+    assert.deepEqual(commandsFor(python.config.hooks.formatters, 'main.py'), [
+      ['uv', 'run', 'ruff', 'format', 'main.py'],
+    ]);
+
+    const tsx = formatPlan(join(root, 'apps', 'web', 'src', 'App.tsx'), root);
+    assert.deepEqual(commandsFor(tsx.config.hooks.formatters, 'App.tsx'), [
+      ['pnpm', 'exec', 'prettier', '--write', 'App.tsx'],
+    ]);
+  });
+
+  it('resolves a repo-relative path against the project, which is how Codex spells one', () => {
+    const root = repoWith(MONOREPO);
+    const plan = formatPlan('apps/api/src/main.py', root);
+
+    assert.equal(plan.path, join(root, 'apps/api/src/main.py'));
+    assert.equal(plan.config.name, 'api');
+  });
+
+  it('runs the formatter in the directory the config was found in', () => {
+    const root = repoWith(MONOREPO);
+    const plan = formatPlan(join(root, 'apps', 'web', 'src', 'App.tsx'), root);
+    assert.equal(plan.config.root, join(root, 'apps', 'web'));
+  });
+
+  it('formats nothing when no config governs the file', () => {
+    assert.equal(formatPlan(join(scratch(), 'src', 'x.ts'), scratch()).config, null);
+  });
+});
+
+describe('monorepo protection — every config guards, each in its own scope', () => {
+  const root = repoWith(MONOREPO);
+  const configs = repoConfigs(root);
+  const guards = guardsFor(configs, root);
+
+  it('reads the root config and every app it names', () => {
+    assert.deepEqual(
+      configs.map((config) => config.name),
+      ['acme-portal', 'api', 'web'],
+    );
+  });
+
+  it('still applies a root rule inside an app that has rules of its own', () => {
+    assert.ok(guardedReason('packages/contracts/openapi.yaml', 'Write', guards));
+  });
+
+  it("reads an app's bare glob as that app's file, not as any file anywhere", () => {
+    assert.match(guardedReason('apps/api/uv.lock', 'Write', guards), /uv lock/);
+    assert.equal(guardedReason('apps/web/uv.lock', 'Write', guards), null);
+  });
+
+  it('keeps the floor in every scope', () => {
+    assert.ok(guardedReason('apps/web/.env', 'Read', guards));
+    assert.ok(guardedReason('.env.local', 'Read', guards));
+  });
+
+  it('scopes a path to the config that declared the rule', () => {
+    assert.equal(scopedPath('apps/api/uv.lock', 'apps/api'), 'uv.lock');
+    assert.equal(scopedPath('apps/api/uv.lock', ''), 'apps/api/uv.lock');
+    assert.equal(scopedPath('apps/web/uv.lock', 'apps/api'), null);
+    assert.equal(scopedPath('apps/api', 'apps/api'), '');
+  });
+
+  it("refuses a command naming any config's secret variable, because a shell has no app", () => {
+    assert.deepEqual(secretVarsFor(configs), ['LINEAR_API_KEY', 'DATABASE_URL']);
+    assert.ok(commandReason('echo $DATABASE_URL', secretVarsFor(configs)));
+  });
+
+  it('leaves a single-config repo with exactly one guard', () => {
+    const single = repoWith({ '': CONFIGS['python-shaped'] });
+    const only = guardsFor(repoConfigs(single), single);
+    assert.equal(only.length, 1);
+    assert.equal(only[0].prefix, '');
+  });
+});
 
 describe('the wiring covers the surface each guard needs', () => {
   /** Every matcher configured for `event` whose hooks run `script`. */

@@ -1,0 +1,23 @@
+{
+  "name": "__PROJECT__",
+  "apps": ["apps/api", "apps/web"],
+  "hooks": {
+    "protected": [
+      {
+        "glob": "packages/contracts/**",
+        "why": "the contract is the seam both apps answer to - change it in a ticket of its own, and regenerate the types on both sides",
+        "scope": "write"
+      },
+      {
+        "glob": ".agents/vendor/**",
+        "why": "layer A is generated and pinned by sha; edit it in the harness repo and re-sync",
+        "scope": "write"
+      }
+    ],
+    "secretVars": ["DATABASE_URL", "LINEAR_API_KEY", "GH_TOKEN"]
+  },
+  "review": {
+    "checklistDir": "docs/agents/subagents",
+    "styleEnforcedBy": "ruff, mypy, ESLint or tsc, depending on the app"
+  }
+}

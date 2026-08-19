@@ -4,7 +4,19 @@
   "title": "harness.config.json",
   "description": "What layer A needs to know about one consuming repository. Layer A is authored once and identical everywhere; every stack fact it depends on is declared here, so the shared half never has to name a toolchain, a directory or a team key. One file per repository, at its root \u2014 a scaffolded product repo with two apps declares one per app.",
   "type": "object",
-  "required": ["name", "gates"],
+  "required": ["name"],
+  "allOf": [
+    {
+      "$comment": "A router config in a monorepo names its apps and runs nothing itself; every other config has to declare a Definition of Done, because a repository whose gates are undeclared is one where nothing is checked and nothing says so.",
+      "if": {
+        "required": ["apps"]
+      },
+      "then": true,
+      "else": {
+        "required": ["gates"]
+      }
+    }
+  ],
   "additionalProperties": false,
   "properties": {
     "$schema": {
@@ -14,6 +26,15 @@
       "type": "string",
       "description": "This repository's name, as it appears in prose and in review output.",
       "minLength": 1
+    },
+    "apps": {
+      "type": "array",
+      "description": "The apps of a monorepo, as repo-relative directories, each holding a harness.config.json of its own. Present only in the root config of a multi-app repository, where it is what makes the gates dispatch: a turn runs the gates of the apps whose gatedPaths its changed files matched, in those apps' directories, rather than every gate in the tree. An app named here with no config of its own is reported, not skipped -- the config search walks upward, so it would otherwise silently run the root's gates from the wrong directory. A path a change puts both apps in scope for -- a shared contract package -- needs no key here: each app names it in its own gatedPaths.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "tracker": {
       "type": "object",
