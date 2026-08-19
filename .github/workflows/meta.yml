@@ -73,19 +73,21 @@ jobs:
       # Toolchains, not gates. Standing up a runtime is a property of the runner; which
       # commands constitute the Definition of Done is a property of the stack, and that
       # half stays in the stack.
+      #
+      # No dependency caches on either. Both `setup-uv` and `setup-node` fail the job in
+      # post-cleanup when the path they were told to cache does not exist — and it does
+      # not here, because this job installs only what a stack's own `install` command
+      # pulls, and a stack that has not declared one installs nothing.
+      #
+      # A red tick for a reason unrelated to what the job measures is the worst kind of
+      # red: it teaches people to ignore the one job that says whether layer A still works.
       - name: Install uv
         uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
 
       - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      # No dependency cache. `setup-node`'s pnpm cache wants a store path that does not
-      # exist until something installs, and it fails the job in post-cleanup when it is
-      # missing — a red tick for a reason unrelated to anything this job checks. The gates
-      # here are seconds; the cache was never worth a failure mode.
       - uses: actions/setup-node@v4
         with:
           node-version-file: frontend-harness/.nvmrc
