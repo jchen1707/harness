@@ -33,6 +33,8 @@ def _root() -> Path:
 
 ROOT = _root()
 VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
+SUBMODULE_CHECK = ROOT / "scripts" / "check_submodules.py"
+GENERATOR = Path(".agents") / "transform" / "generate_main.py"
 PLUGIN_DIR = "plugins/harness"
 failures: list[str] = []
 
@@ -209,6 +211,108 @@ def check_generated_tree() -> None:
             ok("agnostic regions resolved out of main")
 
 
+def check_shared_generator() -> None:
+    """The generator is one file in three repos, and nothing until now noticed a drift.
+
+    `generate_main.py` is byte-identical in both stacks and here; only `transform.json`
+    differs. That was maintained by hand because no repo could see the other two. The
+    submodules are what make it checkable, which is most of why they are mounted.
+    """
+    print("shared generator")
+    mine = ROOT / GENERATOR
+    if not mine.exists():
+        fail(f"{GENERATOR} is missing")
+        return
+
+    checked = 0
+    for name in ("python-harness", "frontend-harness"):
+        theirs = ROOT / name / GENERATOR
+        if not theirs.exists():
+            print(f"  skip {name} is not checked out -- run `git submodule update --init`")
+            continue
+        checked += 1
+        if theirs.read_bytes() != mine.read_bytes():
+            fail(
+                f"{name}/{GENERATOR} differs from this repo's copy. It is one file in "
+                f"three repos -- reconcile it before either branch is regenerated."
+            )
+        else:
+            ok(f"{name} carries the same generator")
+    if not checked:
+        print("  skip no submodule checked out -- nothing to compare")
+
+
+def check_submodule_guard() -> None:
+    """The guard has to keep catching the trap it was written for.
+
+    `git checkout` does not move a submodule's working tree, so a `v2` parent can sit on
+    `main` children in silence. `check_submodules.py` is the only thing that says so, and
+    a guard that quietly stops guarding is worse than no guard -- so build the trap and
+    prove it still trips.
+    """
+    print("submodule guard")
+    if not SUBMODULE_CHECK.exists():
+        fail("check_submodules.py is missing")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        child, parent = base / "child", base / "parent"
+
+        def git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+            # Literals and paths this function just made. `protocol.file.allow` is
+            # needed because git refuses a local-path submodule by default.
+            return run(["git", "-c", "protocol.file.allow=always", *args], cwd)
+
+        child.mkdir()
+        git("init", "-q", "-b", "v2", cwd=child)
+        (child / "README.md").write_text("child\n")
+        git("add", "-A", cwd=child)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "v2", cwd=child)
+        git("branch", "main", cwd=child)
+
+        parent.mkdir()
+        git("init", "-q", "-b", "v2", cwd=parent)
+        added = git("submodule", "add", "-q", "-b", "v2", str(child), "child", cwd=parent)
+        if added.returncode != 0:
+            fail(f"could not build the fixture: {added.stderr.strip()}")
+            return
+        git("add", "-A", cwd=parent)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "mount", cwd=parent)
+
+        clean = run([sys.executable, str(SUBMODULE_CHECK)], parent)
+        if clean.returncode != 0:
+            fail(f"guard rejects a consistent parent: {clean.stdout.strip()}")
+        else:
+            ok("guard passes when the child matches the parent")
+
+        # The trap: move the child to the other branch, exactly as `git checkout` on the
+        # parent would have failed to do.
+        git("checkout", "-q", "main", cwd=parent / "child")
+        tripped = run([sys.executable, str(SUBMODULE_CHECK)], parent)
+        if tripped.returncode == 0:
+            fail("guard passes with the child on the wrong branch -- the trap is unguarded")
+        elif "wrong" not in tripped.stdout and "main" not in tripped.stdout:
+            fail(f"guard failed but did not name the branch: {tripped.stdout.strip()}")
+        else:
+            ok("guard catches a child sitting on the other branch")
+
+        # And the SessionStart adapter has to hand Claude Code something it can parse.
+        hooked = run([sys.executable, str(SUBMODULE_CHECK), "--hook"], parent)
+        if hooked.returncode != 0:
+            fail("hook mode exits non-zero -- SessionStart has no blocking code to use")
+            return
+        try:
+            payload = json.loads(hooked.stdout)
+        except json.JSONDecodeError:
+            fail(f"hook mode emitted non-JSON: {hooked.stdout.strip()[:120]}")
+            return
+        if not payload.get("hookSpecificOutput", {}).get("additionalContext"):
+            fail("hook mode emitted no additionalContext for a real mismatch")
+        else:
+            ok("hook mode emits SessionStart context for a mismatch")
+
+
 def check_version_bump(base: str) -> None:
     """Layer A content must never change without the plugin version changing with it.
 
@@ -265,6 +369,8 @@ def main() -> int:
     if not manifests_only:
         check_vendor_round_trip()
         check_generated_tree()
+        check_shared_generator()
+        check_submodule_guard()
         if base:
             check_version_bump(base)
     print()

@@ -30,6 +30,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The index mode git records for a submodule. `ls-files -s` reports it in place of a
+# blob mode, and it is the marker for "this entry is a commit, not content".
+GITLINK_MODE = "160000"
+
 TEXT_SUFFIXES = frozenset(
     {
         ".md",
@@ -85,20 +89,31 @@ def copy_tracked(source: Path, destination: Path) -> bool:
     branch this job force-pushes.
 
     Returns False for a source that is not a checkout, so fixtures still build.
+
+    Submodules are listed by `ls-files` too, and they are not files: a gitlink entry
+    names a commit in another repository, so there is nothing here to copy and
+    `shutil.copy2` on the directory it stands for raises. They are skipped, and the
+    parent's publish step is what restores the links in the generated branch's index.
     """
     if not (source / ".git").exists():
         return False
     # `git` resolves from PATH, and every argument is either a literal or the path this
     # script was handed, so there is no untrusted input to inject. An absolute executable
     # path would not survive the Windows leg of the frontend harness's CI.
+    #
+    # `-s` prefixes each entry with its mode, which is the only way to tell a gitlink
+    # from a file before touching the filesystem.
     listing = subprocess.run(  # noqa: S603
-        ["git", "-C", str(source), "ls-files", "-z"],  # noqa: S607
+        ["git", "-C", str(source), "ls-files", "-sz"],  # noqa: S607
         capture_output=True,
         check=True,
     )
     destination.mkdir(parents=True)
-    for name in listing.stdout.decode("utf-8").split("\0"):
-        if not name:
+    for entry in listing.stdout.decode("utf-8").split("\0"):
+        if not entry:
+            continue
+        metadata, _, name = entry.partition("\t")
+        if metadata.startswith(f"{GITLINK_MODE} "):
             continue
         origin = source / name
         target = destination / name

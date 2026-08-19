@@ -1,0 +1,27 @@
+# Both stacks, mounted for reading. This is a meta-repo — onboarding, cross-stack
+# review, and one CI job that can see both worlds at once. Layer A never travels this
+# way: `git worktree add` leaves a submodule directory empty with no error, and both
+# stacks run worktree-per-ticket. See AGENTS.md.
+#
+# `branch` is the branch flavour of this parent ref, which is why it is region-gated:
+# a `v2` parent reads the stacks' neutral branches, a generated `main` parent reads
+# their Claude ones. `scripts/check_submodules.py` is what notices when the working
+# tree disagrees.
+[submodule "python-harness"]
+	path = python-harness
+	url = https://github.com/jchen1707/python-harness.git
+	# harness:agnostic
+	branch = v2
+	# /harness:agnostic
+	# harness:claude
+	# branch = main
+	# /harness:claude
+[submodule "frontend-harness"]
+	path = frontend-harness
+	url = https://github.com/jchen1707/frontend-harness.git
+	# harness:agnostic
+	branch = v2
+	# /harness:agnostic
+	# harness:claude
+	# branch = main
+	# /harness:claude

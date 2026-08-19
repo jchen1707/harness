@@ -23,9 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # The generated tree is published to `main`, so both refs have to be reachable.
+      #
+      # Recursively, because `check.py` compares this repo's generator against the copy
+      # in each stack. That file is byte-identical in three repos and was kept so by
+      # hand; the submodules are what finally make the drift checkable, and a
+      # non-recursive checkout would let the check skip itself into uselessness.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       # No setup step, by design: the generator and the gates are stdlib-only Python so
       # that the same files run unchanged in the Node consuming repo, which has no Python
@@ -79,9 +85,43 @@ jobs:
           cd "${RUNNER_TEMP}/publish"
 
           # Replace the tree wholesale: a file deleted on `v2` has to disappear here too.
+          # Gitlinks first and by hand: this worktree was made non-recursively, so the
+          # submodule directories are empty and `git rm -r .` is not reliably willing to
+          # take a submodule it cannot see into.
+          # Not `path`: zsh ties that name to `$PATH`, and these lines get pasted into
+          # a terminal when somebody is debugging a bad publish.
+          for link in $(git ls-files --stage | awk -F'\t' '$1 ~ /^160000 /{print $2}'); do
+            git rm -rq --cached --ignore-unmatch "$link" || true
+            rm -rf "$link"
+          done
           git rm -rq --ignore-unmatch . || true
           cp -a "${RUNNER_TEMP}/main/." .
           git add -A
+
+          # `main` carries the same two submodules as `v2`, pointed at the stacks' own
+          # `main`. This repo's default branch is `main`, so a plain
+          # `git clone --recursive` lands somebody there — and a meta-repo whose
+          # submodules only exist on the branch you did not clone is not a meta-repo.
+          #
+          # The generator cannot emit these: it writes a directory tree, and a gitlink
+          # lives in the index rather than on disk. It skips them, and they are restored
+          # here against each stack's current tip. `.gitmodules` was copied from the
+          # generated tree, so `branch` already reads `main` — that substitution is a
+          # region in the source file, not a rule hidden in this workflow.
+          for key in $(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$'); do
+            name="${key#submodule.}"
+            name="${name%.path}"
+            link="$(git config -f .gitmodules --get "submodule.${name}.path")"
+            url="$(git config -f .gitmodules --get "submodule.${name}.url")"
+            branch="$(git config -f .gitmodules --get "submodule.${name}.branch")"
+            sha="$(git ls-remote "$url" "refs/heads/${branch}" | cut -f1)"
+            if [ -z "$sha" ]; then
+              echo "::error::${url} has no ${branch} branch -- cannot pin ${link}"
+              exit 1
+            fi
+            echo "pinning ${link} at ${branch} ${sha}"
+            git update-index --add --cacheinfo "160000,${sha},${link}"
+          done
 
           if git diff --cached --quiet; then
             echo "main is already current"
