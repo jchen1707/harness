@@ -21,11 +21,11 @@ solve the other.
 Answer one question first: **which process reads this value?** The answer decides everything
 else.
 
-| Reader                    | Where the value lives            | Where the name is declared           |
-| ------------------------- | -------------------------------- | ------------------------------------ |
-| A server or build step    | the repo's ignored env file      | the repo's env example file          |
-| A client bundle           | the repo's ignored env file      | the repo's typed env module, and the example file |
-| A managed MCP connection  | the tool that owns it (e.g. Docker Desktop) | nothing in the repo at all |
+| Reader                   | Where the value lives                       | Where the name is declared                        |
+| ------------------------ | ------------------------------------------- | ------------------------------------------------- |
+| A server or build step   | the repo's ignored env file                 | the repo's env example file                       |
+| A client bundle          | the repo's ignored env file                 | the repo's typed env module, and the example file |
+| A managed MCP connection | the tool that owns it (e.g. Docker Desktop) | nothing in the repo at all                        |
 
 A value read by a client bundle is **shipped to users**. It is not a secret in the sense this
 page means, whatever it is named — never put a private key behind one.
