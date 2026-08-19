@@ -502,6 +502,48 @@ def _frames_expecting_a_checklist() -> list[str]:
     )
 
 
+def check_shared_hooks() -> None:
+    """Layer A's hooks are the first executable thing it ships, so they get a real suite.
+
+    Run here as well as in both stacks, and for a reason the cross-stack job does not
+    cover: that job proves the hooks do not break a *stack's* gates, which is a different
+    question from whether the hooks themselves still work. A repo that ships enforcement
+    code it only tests through its consumers finds out about a regression from its users.
+
+    `node --test` rather than a framework: this same suite runs from a vendored tree in a
+    Python repo, which has no pnpm and no test runner beyond the one built into Node.
+    """
+    print("shared hooks")
+    suite = ROOT / PLUGIN_DIR / "hooks" / "hooks.test.mjs"
+    if not suite.exists():
+        fail("the shared hooks ship no test suite")
+        return
+
+    node = shutil.which("node")
+    if node is None:
+        # Not a pass. The suite is the only thing standing between a narrowed matcher and
+        # a guard that goes quiet, and "we could not run it" must not read as "it passed".
+        fail("node is not on PATH -- the shared hook suite could not run")
+        return
+
+    proc = subprocess.run(  # noqa: S603
+        [node, "--test", str(suite)],
+        cwd=ROOT / PLUGIN_DIR / "hooks",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-25:])
+        fail(f"the shared hook suite fails:\n{tail}")
+        return
+    passed = next(
+        (line.split()[-1] for line in proc.stdout.splitlines() if line.startswith("# pass ")),
+        "?",
+    )
+    ok(f"{passed} shared hook test(s) pass")
+
+
 def check_stack_configs() -> None:
     """`harness.config.json` is the contract; a stack that breaks it breaks layer A.
 
@@ -569,6 +611,28 @@ def check_stack_configs() -> None:
                 )
             else:
                 ok(f"{name}: ninth axis {ninth['label']} resolves")
+        # The hooks read their whole pathspec from here. A stack that adopts the shared
+        # Stop gate and declares no gated paths gets a gate that never fires -- green, and
+        # measuring nothing. That is the failure mode this whole repository exists to make
+        # loud, so it is checked rather than left to the stack.
+        hooks = config.get("hooks")
+        if hooks is None:
+            print(f"  skip {name} declares no hooks block yet")
+        else:
+            for key in ("gatedPaths", "gatedExtensions"):
+                if not hooks.get(key):
+                    fail(f"{name}: hooks.{key} is empty -- the Stop gate would never fire")
+            for entry in hooks.get("protected", []):
+                if not entry.get("glob") or not entry.get("why"):
+                    fail(f"{name}: a protected entry has no glob or no reason: {entry}")
+                if entry.get("scope") not in (None, "write", "secret"):
+                    fail(f"{name}: protected {entry['glob']!r} has scope {entry.get('scope')!r}")
+            for entry in hooks.get("formatters", []):
+                for argv in entry.get("run", []):
+                    if not isinstance(argv, list) or not argv:
+                        fail(f"{name}: a formatter for {entry.get('match')} has no argv")
+            ok(f"{name}: hooks contract declared")
+
         if not gates:
             continue
         ok(f"{name}: {len(gates)} gate(s) declared")
@@ -634,6 +698,7 @@ def main() -> int:
         check_shared_generator()
         check_submodule_guard()
         check_layer_a_composition()
+        check_shared_hooks()
         check_stack_configs()
         if base:
             check_version_bump(base)

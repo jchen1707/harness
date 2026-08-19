@@ -128,11 +128,14 @@ for why that file has the shape it does.
   shared at `plugins/harness/docs/agents/testing.md`; the definition stays with the stack.
 - **The ninth review axis.** `async-reviewer` and `a11y-reviewer` are each that stack's
   alone. `harness.config.json` names it; `full-review.js` slots it in after `tests`.
-- **The hook configuration** — gated paths, protected files, formatters. It belongs in
-  `harness.config.json` and is not there yet: the hooks are still four implementations
-  across two stacks, and the right shape for their config is not knowable until they are
-  one. Declaring the keys before anything reads them would be a claim the repo cannot
-  check.
+- **What the hooks act on** — gated paths, protected files, formatters, secret variable
+  names. The hooks themselves are layer A as of phase 5; what they watch is irreducibly the
+  stack's, and it is declared under `hooks` in `harness.config.json`. The one exception is
+  the `.env` floor in `protect_paths`, which is built in and cannot be lowered by a config.
+- **The hook wiring.** Layer A ships `hooks/hooks.json` for the plugin path, addressed
+  through `${CLAUDE_PLUGIN_ROOT}`. A repo that runs the vendored copy instead wires the same
+  four scripts by repo-relative path in its own settings and its own Codex adapter, because
+  only that repo knows where it put them.
 
 ## Changing layer A
 

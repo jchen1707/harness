@@ -43,15 +43,36 @@ agree on quoting, on globbing, and on what happens to a path with a space in it.
 four readers are JavaScript and two are Python; the odds of them agreeing are poor and the
 disagreement would be silent. argv has one meaning.
 
-## What is not in here yet
+## Why the hooks read this file too
 
-Hook configuration — the gated paths, the protected files, the formatters — belongs in this
-file and is not in it yet. The hooks are still four implementations across two stacks, and
-the right shape for their config is not knowable until they are one. It arrives with them.
+`hooks` is the second half of the same idea, and it arrived a phase later on purpose. While
+the guards were four implementations across two stacks, the right shape for their config was
+not knowable — and declaring keys nothing read would have been a claim the repository could
+not check. They are one implementation now, so the keys are real.
 
-Declaring the keys now and leaving them unread would be worse than leaving them out: a config
-key nothing consumes is a claim the repository cannot check, and it will be wrong by the time
-something does read it.
+Four hooks read four groups:
+
+- `gatedPaths` / `gatedFiles` / `gatedExtensions` — what the Stop gate watches. This is a
+  filter, not a list of what matters: a turn that touched only prose ends freely, because
+  gating prose burns the 8-consecutive-block override budget on writing work. Include this
+  repo's own harness wiring, or a broken edit to the thing that enforces the gates is the one
+  change the walk-away gate can never catch.
+- `protected` / `allowed` — what an agent must not touch, and the exception. `scope` is the
+  interesting field: `write` refuses writes and leaves reads alone, because a write to a
+  generated file is a mistake the author can undo. `secret` refuses both, because a read puts
+  the value in the context window, the transcript on disk and the API request in one step and
+  only rotation undoes that.
+- `secretVars` — variable names whose appearance in a shell command is enough to refuse it.
+  The environment dumps and the inline interpreters need no config; a single-variable
+  expansion can only be recognised from the name.
+- `formatters` — what to run after an edit, per extension, in order.
+
+**The `.env` rules are not in your config, and cannot be removed from it.** `protect_paths`
+carries them as a built-in floor. A guard whose config goes missing and quietly protects
+nothing is worse than no guard, because the repository still reads as protected.
+
+**A `why` is the whole message an agent receives.** `"regenerate with \`uv lock\`, never
+hand-edit"`ends the attempt;`"protected"` invites a retry with a different tool.
 
 ## Adding a key
 

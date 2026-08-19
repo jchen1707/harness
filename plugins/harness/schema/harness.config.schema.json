@@ -82,6 +82,99 @@
         }
       }
     },
+    "hooks": {
+      "type": "object",
+      "description": "What the shared hooks need from this repository. Layer A ships one implementation of the write guard, the secret guard, the formatter and the Stop gate; every path, extension and command they act on is declared here. Omit a key and that hook does nothing rather than guessing -- with one exception: protect_paths keeps a built-in floor of secret rules that no config can lower, because a guard that silently protects nothing when its config goes missing is worse than no guard at all.",
+      "additionalProperties": false,
+      "properties": {
+        "gatedPaths": {
+          "type": "array",
+          "description": "Directories the Stop gate watches, as a git pathspec. The application and its tests, plus this repo's own harness wiring -- a broken edit to the thing that enforces the gates is the one change the walk-away gate would otherwise never catch. Prose, plans and docs stay out: they are what sessions churn on, and gating them burns the 8-consecutive-block override budget on writing work.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gatedFiles": {
+          "type": "array",
+          "description": "Individual files that configure the gates themselves. A change to one can break every gate at once while touching no application code, so it is gated for the same reason the source is.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gatedExtensions": {
+          "type": "array",
+          "description": "Extensions the gates read, including the dot. A path under gatedPaths only triggers the gates when its extension is listed here or its exact path is in gatedFiles.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "protected": {
+          "type": "array",
+          "description": "Paths an agent must not touch, as globs against the repo-relative forward-slashed path. `**` crosses directory separators and `*` does not, which is what lets `dist/**` cover a tree while `.env.*` stays inside one segment. The .env rules are built in; these are this repo's additions.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["glob", "why"],
+            "properties": {
+              "glob": {
+                "type": "string",
+                "minLength": 1
+              },
+              "why": {
+                "type": "string",
+                "description": "One clause completing \"Refusing to edit <path> - ...\". It is the whole message the agent gets, so it has to name the alternative: \"regenerate with `uv lock`, never hand-edit\" ends the attempt, \"protected\" invites a retry.",
+                "minLength": 1
+              },
+              "scope": {
+                "enum": ["write", "secret"],
+                "default": "write",
+                "description": "`write` refuses writes and leaves reads alone -- a write to a generated file is a mistake the author can undo. `secret` refuses both: the value enters the context window, the transcript on disk and the API request in one step, and only rotation undoes that."
+              }
+            }
+          }
+        },
+        "allowed": {
+          "type": "array",
+          "description": "Filenames exempt from every protected rule, matched on the basename. This is the exception a permission deny rule cannot express: `Read(./.env.*)` would also hide `.env.example`, the committed file that documents the env contract. `.env.example` is exempt by default; list anything else here.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secretVars": {
+          "type": "array",
+          "description": "Environment variables whose name appearing in a shell command is enough to refuse it. The whole-environment dumps and the inline interpreters are recognised by their own spelling and need no config; a single-variable expansion can only be recognised from the variable's name. Read docs/agents/secrets.md first: prefix and name matching stop an accident, not an intent, and removing the value from the environment is the only complete fix.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "formatters": {
+          "type": "array",
+          "description": "What to run after an edit, per extension, in order. The edited path is appended to each command. Advisory: failures are ignored, because formatting is a fixup and the gate is the Stop hook. List every extension the format gate checks, not only the ones gatedExtensions names -- otherwise a doc edit skips formatting now and fails the gate later in a session that never touched it.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["match", "run"],
+            "properties": {
+              "match": {
+                "type": "array",
+                "description": "Extensions this entry formats, including the dot. An empty list matches nothing.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "run": {
+                "type": "array",
+                "description": "Commands to run in order, each as argv without the file path. An autofix entry must not be able to remove an unused import: this hook fires after every single edit, so in a batch it runs between the edit that adds an import and the edit that adds its first use, and a fix at that moment deletes the import while the next edit references it. Spell the exclusion the way your linter does -- ruff's is `--unfixable F401`.",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/argv"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "review": {
       "type": "object",
       "description": "What /full-review needs that layer A cannot know. The reviewer frames are shared; the checklists they read are this repo's.",
