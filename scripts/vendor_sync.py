@@ -225,6 +225,28 @@ def is_layer_a_stub(path: Path) -> bool:
         return False
 
 
+def copy_sidecars(source: Path, stub_dir: Path) -> None:
+    """Mirror a shared skill's `agents/` sidecars next to its stub.
+
+    The sidecar is how a skill reaches a harness that is not Claude Code with its own
+    metadata -- `agents/openai.yaml` carries the Codex display name and default prompt. It
+    sits beside the canonical `SKILL.md`, which is inside the vendored tree; discovery walks
+    `.agents/skills/` and looks beside the **stub**. So the metadata existed and was not
+    where anything would look for it: the skill still resolved, on the neutral `SKILL.md`
+    alone, and quietly without its harness-specific half.
+
+    Copied rather than pointed at, because a sidecar is data read by the harness before it
+    reads anything else -- there is no stage at which a pointer could be followed.
+    """
+    sidecars = source.parent / "agents"
+    destination = stub_dir / "agents"
+    if destination.exists():
+        shutil.rmtree(destination)
+    if not sidecars.is_dir():
+        return
+    shutil.copytree(sidecars, destination)
+
+
 def write_stubs(target: Path) -> tuple[list[str], list[str]]:
     """Generate the discovery stubs, and remove the ones layer A no longer ships.
 
@@ -243,10 +265,14 @@ def write_stubs(target: Path) -> tuple[list[str], list[str]]:
     for name, source, pointer in entries:
         stub = root / name / "SKILL.md"
         text = stub_text(name, source, pointer)
-        if stub.exists() and stub.read_text(encoding="utf-8") == text:
+        sidecars = sorted((source.parent / "agents").rglob("*")) if (source.parent / "agents").is_dir() else []
+        present = sorted((stub.parent / "agents").rglob("*")) if (stub.parent / "agents").is_dir() else []
+        current = stub.exists() and stub.read_text(encoding="utf-8") == text
+        if current and len(sidecars) == len(present):
             continue
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text(text, encoding="utf-8")
+        copy_sidecars(source, stub.parent)
         written.append(name)
 
     shipped = {name for name, _, _ in entries}
@@ -415,6 +441,14 @@ def cmd_check(target: Path, harness: Path | None) -> int:
             problems.append(
                 f"discovery stub edited by hand: {STUB_DIR}/{name}/SKILL.md -- it is generated"
             )
+        # And its sidecars, which is where a harness that is not Claude Code reads this
+        # skill's own metadata. A missing one resolves the skill without it, silently.
+        for sidecar in (source.parent / "agents").glob("*"):
+            beside = target / STUB_DIR / name / "agents" / sidecar.name
+            if not beside.exists():
+                problems.append(f"no {sidecar.name} beside the {name} stub -- run `sync`")
+            elif beside.read_bytes() != sidecar.read_bytes():
+                problems.append(f"sidecar edited by hand: {STUB_DIR}/{name}/agents/{sidecar.name}")
 
     if problems:
         print("FAIL: vendored layer A is out of date with harness")
