@@ -48,6 +48,14 @@
  * Escape hatch: set `HARNESS_SKIP_VERIFY=1` to disable for a session. The legacy
  * `CLAUDE_SKIP_VERIFY` name remains supported — the gate is not Claude's, and naming it
  * after one harness is how the same escape hatch ended up with two names in two repos.
+ *
+ * **`claude --bare` disables this hook, and more.** Its own help says: "Minimal mode: skip
+ * hooks, LSP, plugin sync, attribution, auto-memory, background prefetches, keychain reads,
+ * and CLAUDE.md auto-discovery." So a `--bare` session has no Stop gate, no plugin — which
+ * is to say no layer A at all where the plugin is the carrier — and no instruction file. It
+ * is a claude flag, not a sandbox one; `sbx` has no such flag and does not skip hooks. An
+ * unattended poller must not use `--bare` and expect the walk-away property, and that is
+ * worth stating because the failure is the quiet kind: everything runs, nothing enforces.
  */
 
 import { join, resolve } from 'node:path';

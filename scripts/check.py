@@ -247,6 +247,28 @@ def check_discovery_stubs() -> None:
         elif hinted:
             ok("a stub carries the front matter of the file it points at")
 
+        # A skill's Codex sidecar has to land beside the stub, not only beside the canonical
+        # file inside the vendored tree. Discovery walks `.agents/skills/`; metadata that
+        # sits anywhere else is metadata nothing reads, and the skill resolves without it.
+        sidecar_skills = [
+            name for name in skills
+            if (ROOT / PLUGIN_DIR / "skills" / name / "agents").is_dir()
+        ]
+        absent = [
+            name for name in sidecar_skills
+            if not (stubs / name / "agents" / "openai.yaml").exists()
+        ]
+        if absent:
+            fail(f"no openai.yaml beside the stub(s) for {', '.join(absent)}")
+        elif sidecar_skills:
+            ok(f"every sidecar reaches the directory discovery walks ({len(sidecar_skills)} skill(s))")
+
+        # And a command has none, which is correct rather than an omission: the sidecar is a
+        # skill's metadata, and a command that layer A ships has no `agents/` of its own.
+        stray = [name for name in commands if (stubs / name / "agents").exists()]
+        if stray:
+            fail(f"sync invented a sidecar directory for command(s): {', '.join(stray)}")
+
         def check_target() -> subprocess.CompletedProcess[str]:
             return run([sys.executable, str(VENDOR_SYNC), "check", "--target", str(target)], cwd=ROOT)
 
