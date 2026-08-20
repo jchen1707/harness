@@ -37,19 +37,14 @@
         "python",
         "scripts/emit_contract.py",
         "--check",
-        "../../packages/contracts/openapi.json"
+        "contracts/openapi.json"
       ],
-      "caveat": "it compares this app's emitted document with the committed one. It cannot tell you whether the web app has followed a change -- that is the web app's typecheck, against the types it generates from this file."
+      "caveat": "it compares this app's emitted document with the committed one. It cannot tell you whether any client has followed a change -- in a split repository nothing can, until that client pins the new version."
     }
   ],
   "hooks": {
-    "gatedPaths": ["src", "tests", "scripts", "../../packages/contracts"],
-    "gatedFiles": [
-      "pyproject.toml",
-      "harness.config.json",
-      "../../harness.config.json",
-      "../../.claude/settings.json"
-    ],
+    "gatedPaths": ["src", "tests", "scripts", "contracts"],
+    "gatedFiles": ["pyproject.toml", "harness.config.json", ".claude/settings.json"],
     "gatedExtensions": [".py", ".json"],
     "protected": [
       {
@@ -60,6 +55,11 @@
       {
         "glob": "**/migrations/**",
         "why": "schema migrations are irreversible - a human applies these",
+        "scope": "write"
+      },
+      {
+        "glob": "contracts/openapi.json",
+        "why": "generated from the handlers; run `uv run python scripts/emit_contract.py contracts/openapi.json` instead of editing it",
         "scope": "write"
       }
     ],

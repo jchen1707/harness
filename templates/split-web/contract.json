@@ -1,0 +1,5 @@
+{
+  "$comment": "The api's contract, pinned. `pnpm contract:update` fetches this version and regenerates the client's types. Set `repo` before the first update.",
+  "repo": "OWNER/__PROJECT__-api",
+  "version": "v0.1.0"
+}

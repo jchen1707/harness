@@ -50,7 +50,7 @@ import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { globToRegExp, loadConfig, readPayload, relativePath, toolPaths } from './lib.mjs';
+import { globToRegExp, loadConfig, readPayload, relativePath, repoRelative, toolPaths } from './lib.mjs';
 
 /** Refuse writes. Reading the file costs nothing, so reading stays allowed. */
 export const WRITE = 'write';
@@ -177,7 +177,7 @@ export function repoConfigs(cwd) {
  */
 export function guardsFor(configs, rootDir) {
   return configs.map((config) => ({
-    prefix: resolve(config.root) === resolve(rootDir) ? '' : relativePath(config.root, rootDir),
+    prefix: repoRelative(config.root, rootDir),
     rules: rulesFor(config),
     allowed: allowedFor(config),
   }));

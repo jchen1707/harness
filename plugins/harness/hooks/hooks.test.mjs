@@ -50,6 +50,7 @@ import {
 import { commandsFor, formatPlan } from './format_edited.mjs';
 import {
   STOP_KINDS,
+  declaredPath,
   dispatch,
   gatedChange,
   isGated,
@@ -502,6 +503,29 @@ describe('Stop gate — mechanics', () => {
 
   it('says nothing about skipped gates when every gate runs', () => {
     assert.equal(skippedNote([{ name: 'a', kind: 'lint', run: ['x'] }]), '');
+  });
+
+  // `git status --porcelain` reports repo-root-relative paths whatever directory it ran in.
+  // A config declares its paths relative to itself. Reconciling the two is what makes
+  // `gatedFiles` work at all inside an app, and getting it wrong is silent: the entry simply
+  // never matches, and the gate stops noticing that file.
+  it('reads a declared file as git would spell it, from inside an app', () => {
+    assert.equal(declaredPath('apps/api', 'harness.config.json'), 'apps/api/harness.config.json');
+    assert.equal(declaredPath('apps/api', '../../harness.config.json'), 'harness.config.json');
+    assert.equal(declaredPath('', 'harness.config.json'), 'harness.config.json');
+  });
+
+  it('matches a gated file inside an app, and the root file it points up at', () => {
+    const hooks = { gatedFiles: ['harness.config.json', '../../.claude/settings.json'], gatedExtensions: [] };
+    assert.ok(isGated('apps/web/harness.config.json', hooks, 'apps/web'));
+    assert.ok(isGated('.claude/settings.json', hooks, 'apps/web'));
+    assert.ok(!isGated('apps/api/harness.config.json', hooks, 'apps/web'));
+  });
+
+  it('still matches an extension anywhere, which needs no prefix', () => {
+    const hooks = { gatedFiles: [], gatedExtensions: ['.py'] };
+    assert.ok(isGated('apps/api/src/main.py', hooks, 'apps/api'));
+    assert.ok(isGated('src/main.py', hooks));
   });
 });
 
