@@ -1,0 +1,55 @@
+{
+  "name": "__PROJECT__-api",
+  "install": ["uv", "sync"],
+  "dev": {
+    "run": ["uv", "run", "uvicorn", "api.main:app", "--reload"],
+    "url": "http://127.0.0.1:8000",
+    "readyCheck": "GET /healthz responds 200 with {\"status\": \"ok\"}"
+  },
+  "gates": [
+    { "name": "ruff check", "kind": "lint", "run": ["uv", "run", "ruff", "check", "."] },
+    {
+      "name": "ruff format --check",
+      "kind": "format",
+      "run": ["uv", "run", "ruff", "format", "--check", "."]
+    },
+    {
+      "name": "mypy",
+      "kind": "types",
+      "run": ["uv", "run", "mypy"],
+      "caveat": "mypy checks only the paths in pyproject.toml's `files`. A new top-level directory is silently unchecked while this stays green."
+    },
+    { "name": "pytest", "kind": "test", "run": ["uv", "run", "pytest"] }
+  ],
+  "hooks": {
+    "gatedPaths": ["src", "tests", "../../packages/contracts"],
+    "gatedFiles": [
+      "pyproject.toml",
+      "harness.config.json",
+      "../../harness.config.json",
+      "../../.claude/settings.json"
+    ],
+    "gatedExtensions": [".py", ".yaml"],
+    "protected": [
+      {
+        "glob": "uv.lock",
+        "why": "regenerate with `uv lock`, never hand-edit",
+        "scope": "write"
+      },
+      {
+        "glob": "**/migrations/**",
+        "why": "schema migrations are irreversible - a human applies these",
+        "scope": "write"
+      }
+    ],
+    "formatters": [
+      {
+        "match": [".py"],
+        "run": [
+          ["uv", "run", "ruff", "format"],
+          ["uv", "run", "ruff", "check", "--fix", "--unfixable", "F401"]
+        ]
+      }
+    ]
+  }
+}

@@ -38,9 +38,15 @@
  * apply whether or not `harness.config.json` was found or parsed. A guard that silently
  * protects nothing when its config goes missing is worse than no guard, because the repo
  * still reads as protected. The config adds to the floor; it cannot lower it.
+ *
+ * **A monorepo has more than one config, and every one of them guards.** The root's rules
+ * hold over the whole tree; an app's hold inside that app, with its globs read relative to
+ * the app — `uv.lock` in `apps/api/harness.config.json` means `apps/api/uv.lock`, not any
+ * lockfile anywhere. Reading only one config would be the silent half-protection this hook
+ * exists to end: adding a config to an app would quietly cancel the root's rules there.
  */
 
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -142,17 +148,82 @@ export function allowedFor(config) {
   return new Set([...ALLOWED_FLOOR, ...config.hooks.allowed.filter((n) => typeof n === 'string')]);
 }
 
+/**
+ * Every config that guards something in this repository: the root's, plus each app it names.
+ *
+ * Read from the root config's `apps` rather than by searching the tree: a hook that walked
+ * a large checkout looking for config files would pay for it on every tool call.
+ */
+export function repoConfigs(cwd) {
+  const root = loadConfig(cwd);
+  if (!root.found || root.apps.length === 0) return [root];
+
+  const configs = [root];
+  for (const app of root.apps) {
+    const dir = join(root.root, app);
+    const config = loadConfig(dir);
+    // `loadConfig` walks upward, so an app with no config of its own returns the root's.
+    // Taking it would apply the root's globs twice under an app-relative reading.
+    if (config.found && resolve(config.root) === resolve(dir)) configs.push(config);
+  }
+  return configs;
+}
+
+/**
+ * The compiled rule sets, each with the repo-relative prefix its globs are written against.
+ *
+ * The root's prefix is `''`; an app's is its directory. Both stay in the list — a rule at
+ * the root is not superseded by an app declaring rules of its own.
+ */
+export function guardsFor(configs, rootDir) {
+  return configs.map((config) => ({
+    prefix: resolve(config.root) === resolve(rootDir) ? '' : relativePath(config.root, rootDir),
+    rules: rulesFor(config),
+    allowed: allowedFor(config),
+  }));
+}
+
+/**
+ * `path` as the config at `prefix` would spell it, or `null` when it lies outside that tree.
+ */
+export function scopedPath(path, prefix) {
+  if (!prefix) return path;
+  if (path === prefix) return '';
+  return path.startsWith(`${prefix}/`) ? path.slice(prefix.length + 1) : null;
+}
+
+/** The first reason any guard refuses `path`, or `null`. */
+export function guardedReason(path, toolName, guards) {
+  for (const guard of guards) {
+    const scoped = scopedPath(path, guard.prefix);
+    if (scoped === null) continue;
+    const reason = blockReason(scoped, toolName, guard.rules, guard.allowed);
+    if (reason) return reason;
+  }
+  return null;
+}
+
+/** Every secret variable name any config in this repository declared. */
+export function secretVarsFor(configs) {
+  return [
+    ...new Set(
+      configs.flatMap((config) => config.hooks.secretVars.filter((n) => typeof n === 'string')),
+    ),
+  ];
+}
+
 async function main() {
   const payload = await readPayload();
   if (!payload) return 0;
 
   const cwd = payload.cwd ?? '';
-  const config = loadConfig(cwd);
+  const configs = repoConfigs(cwd);
   const toolName = payload.tool_name ?? '';
 
   // The command guard first: a Bash call carries no `file_path`, so the path loop below
-  // would pass it through silently.
-  const why = commandReason(payload.tool_input?.command, config.hooks.secretVars);
+  // would pass it through silently. A shell command belongs to no app in particular, so
+  // every config's secret names count.
+  const why = commandReason(payload.tool_input?.command, secretVarsFor(configs));
   if (why && toolPaths(payload).length === 0) {
     // ASCII only: hook stderr is decoded by the harness, and a Windows console codepage
     // can mangle non-ASCII on the way out.
@@ -160,11 +231,10 @@ async function main() {
     return 2;
   }
 
-  const rules = rulesFor(config);
-  const allowed = allowedFor(config);
+  const guards = guardsFor(configs, configs[0].root);
   for (const raw of toolPaths(payload)) {
     const path = relativePath(raw, cwd);
-    const reason = blockReason(path, toolName, rules, allowed);
+    const reason = guardedReason(path, toolName, guards);
     if (!reason) continue;
 
     const [verb, advice] = READ_TOOLS.has(toolName)

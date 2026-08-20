@@ -638,6 +638,202 @@ def check_stack_configs() -> None:
         ok(f"{name}: {len(gates)} gate(s) declared")
 
 
+# One probe per app, written into a scaffolded repo in place of its real gates. `node`
+# rather than a shell one-liner: the marker has to record which app it ran as, and a quoted
+# `-e` argument is the one thing that does not survive both a POSIX shell and cmd.exe.
+PROBE = """import { appendFileSync } from 'node:fs';
+appendFileSync(new URL('../../ran.log', import.meta.url), '%s\\n');
+process.exit(%s);
+"""
+
+
+def _template_configs() -> dict[str, dict]:
+    """Every `harness.config.json` under `templates/`, keyed by its directory."""
+    found = {}
+    for path in sorted((ROOT / "templates").rglob("harness.config.json")):
+        try:
+            found[str(path.parent.relative_to(ROOT / "templates"))] = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            fail(f"templates/{path.parent.name}/harness.config.json does not parse: {exc}")
+    return found
+
+
+def check_templates() -> None:
+    """The scaffolds have to satisfy the same contract they hand to a new repository.
+
+    A template is the one place a broken config would not be caught by anything else: no
+    hook runs against `templates/`, and the repository it becomes is somebody else's the
+    moment it is copied. So the contract is checked here, before it can be inherited.
+    """
+    print("templates")
+    configs = _template_configs()
+    if "monorepo" not in configs:
+        fail("templates/monorepo has no harness.config.json -- there is nothing to scaffold")
+        return
+
+    root = configs["monorepo"]
+    apps = root.get("apps") or []
+    if not apps:
+        fail("the monorepo template's root config names no apps -- the gates would not dispatch")
+
+    # The directory an app lands in, and the template that lands there. `apps/api` comes
+    # from `templates/api`, which is the whole of the mapping.
+    for app in apps:
+        template = app.split("/")[-1]
+        config = configs.get(template)
+        if config is None:
+            fail(f"the root config names {app} but templates/{template} has no config of its own")
+            continue
+
+        gates = config.get("gates") or []
+        if not gates:
+            fail(f"templates/{template}: declares no gates -- /lint and /test would run nothing")
+        for gate in gates:
+            if gate.get("kind") not in GATE_KINDS:
+                fail(f"templates/{template}: gate {gate.get('name')!r} has kind {gate.get('kind')!r}")
+            if not isinstance(gate.get("run"), list) or not gate.get("run"):
+                fail(f"templates/{template}: gate {gate.get('name')!r} has no argv in `run`")
+
+        hooks = config.get("hooks") or {}
+        for entry in hooks.get("protected", []):
+            if not entry.get("glob") or not entry.get("why"):
+                fail(f"templates/{template}: a protected entry has no glob or no reason: {entry}")
+
+        # The two cross-app declarations that make the dispatch work. Each app names the
+        # shared contract and the root config in its own pathspec, and nothing else says so:
+        # drop either and a contract change quietly stops running that app's gates, or a
+        # change to the file that defines the apps stops running any.
+        if "../../packages/contracts" not in (hooks.get("gatedPaths") or []):
+            fail(
+                f"templates/{template}: does not gate ../../packages/contracts -- a contract "
+                f"change would not run this app's gates, and nothing else declares that it should"
+            )
+        if "../../harness.config.json" not in (hooks.get("gatedFiles") or []):
+            fail(
+                f"templates/{template}: does not gate ../../harness.config.json -- an edit to "
+                f"the config that names the apps would run no gates at all"
+            )
+    ok(f"the monorepo template dispatches to {len(apps)} app(s)")
+
+    # One placeholder, and only one. A second spelling is how a scaffold ships a repository
+    # with `__TEAM__` still in it, which nothing downstream would notice.
+    strays = set()
+    for path in sorted((ROOT / "templates").rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        strays.update(set(re.findall(r"__[A-Z][A-Z0-9_]*__", text)) - {"__PROJECT__"})
+    if strays:
+        fail(f"templates carry placeholders nothing substitutes: {', '.join(sorted(strays))}")
+    else:
+        ok("__PROJECT__ is the only placeholder")
+
+
+def check_scaffold_dispatch() -> None:
+    """The note's section 11 experiment, kept rather than run once.
+
+    A monorepo is only cheaper than two repositories if the gates run per app, and that is
+    one mechanism with four answers to get right: one app's change runs one app's gates, a
+    shared contract runs both, and prose runs none. Every one of them fails silently in the
+    direction that looks fine -- a gate that did not run reports nothing at all.
+
+    So it is driven, not asserted. A real scaffold, a real `git status`, the real
+    `verify.mjs`, with each app's gates swapped for a probe that records which app it ran
+    as. The gate commands are the only thing replaced: the `gatedPaths` under test are the
+    ones the template ships.
+    """
+    print("scaffold dispatch")
+    scaffold = ROOT / "scripts" / "new_project.py"
+    verify = ROOT / PLUGIN_DIR / "hooks" / "verify.mjs"
+    node = shutil.which("node")
+    if node is None:
+        fail("node is not on PATH -- the dispatch experiment could not run")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "acme-portal"
+        built = run([sys.executable, str(scaffold), "create", "acme-portal", "--into", str(project)], cwd=ROOT)
+        if built.returncode != 0:
+            fail(f"new_project.py could not scaffold: {(built.stderr or built.stdout).strip()}")
+            return
+        ok("new_project.py scaffolds a monorepo")
+
+        # Swap each app's gates for a probe, leaving its pathspec exactly as shipped.
+        for app, code in (("api", 0), ("web", 0)):
+            directory = project / "apps" / app
+            (directory / "gate.mjs").write_text(PROBE % (app, code), encoding="utf-8")
+            config = json.loads((directory / "harness.config.json").read_text())
+            config["gates"] = [{"name": f"{app} probe", "kind": "test", "run": ["node", "gate.mjs"]}]
+            (directory / "harness.config.json").write_text(json.dumps(config, indent=2) + "\n")
+
+        log = project / "ran.log"
+
+        def turn(*touched: str) -> list[str]:
+            """Touch some paths, run the Stop hook, and report which apps gated."""
+            log.write_text("", encoding="utf-8")
+            for name in touched:
+                path = project / name
+                # A JSON file has to stay parseable through the touch: the config that
+                # names the apps is one of the cases, and a broken one would be read as
+                # "no config" rather than as the change it is meant to represent.
+                if path.suffix == ".json":
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    data["$comment"] = "touched"
+                    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                else:
+                    path.write_text(
+                        path.read_text(encoding="utf-8") + "\n# touched\n", encoding="utf-8"
+                    )
+            payload = json.dumps({"cwd": str(project)})
+            result = subprocess.run(  # noqa: S603
+                [node, str(verify)], input=payload, cwd=project,
+                capture_output=True, text=True, check=False,
+            )
+            for name in touched:
+                run(["git", "checkout", "--", name], cwd=project)
+            turn.last = result  # type: ignore[attr-defined]
+            return [line for line in log.read_text(encoding="utf-8").split("\n") if line]
+
+        cases = {
+            "a change in one app runs that app's gates and no others": (
+                ("apps/api/src/api/health.py",), ["api"],
+            ),
+            "and the same holds for the other app": (
+                ("apps/web/src/health.ts",), ["web"],
+            ),
+            "a change to the shared contract runs both": (
+                ("packages/contracts/openapi.yaml",), ["api", "web"],
+            ),
+            "a change to the config that names the apps runs both": (
+                ("harness.config.json",), ["api", "web"],
+            ),
+            "prose ends the turn freely": (
+                ("docs/architecture.md",), [],
+            ),
+        }
+        for label, (touched, expected) in cases.items():
+            actual = turn(*touched)
+            if actual != expected:
+                fail(f"{label}: expected {expected or 'no gates'}, ran {actual or 'none'}")
+            else:
+                ok(label)
+
+        # And a failing gate has to block, naming the app whose gate it was. A dispatch that
+        # runs the right gates and swallows their verdict is the same green as no gate.
+        (project / "apps" / "web" / "gate.mjs").write_text(PROBE % ("web", 1), encoding="utf-8")
+        turn("apps/web/src/health.ts")
+        blocked = turn.last  # type: ignore[attr-defined]
+        if blocked.returncode != 2:
+            fail(f"a failing app gate exited {blocked.returncode}, so the turn would end anyway")
+        elif "acme-portal-web" not in blocked.stderr:
+            fail(f"the block did not name the app that failed: {blocked.stderr.strip()[:160]}")
+        else:
+            ok("a failing gate blocks the turn and names its app")
+
+
 def check_version_bump(base: str) -> None:
     """Layer A content must never change without the plugin version changing with it.
 
@@ -700,6 +896,8 @@ def main() -> int:
         check_layer_a_composition()
         check_shared_hooks()
         check_stack_configs()
+        check_templates()
+        check_scaffold_dispatch()
         if base:
             check_version_bump(base)
     print()

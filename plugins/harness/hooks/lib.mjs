@@ -13,7 +13,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join, parse } from 'node:path';
+import { dirname, join, parse, resolve, sep } from 'node:path';
 import process from 'node:process';
 
 /**
@@ -150,30 +150,61 @@ export function globToRegExp(pattern) {
 
 export const CONFIG_NAME = 'harness.config.json';
 
+/** True when `dir` holds a readable `harness.config.json`. */
+function hasConfig(dir) {
+  try {
+    readFileSync(join(dir, CONFIG_NAME));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when `dir` is `ceiling` or sits inside it. Case-folded, because macOS and Windows are. */
+function within(dir, ceiling) {
+  const a = dir.toLowerCase();
+  const b = ceiling.toLowerCase();
+  return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+}
+
 /**
- * Walk up from `start` for the nearest `harness.config.json`.
+ * Every `harness.config.json` from `start` upwards, nearest first, stopping at `ceiling`.
  *
  * Upward rather than at a fixed path, for the shape phase 6 scaffolds: a monorepo declares
- * one config per app, and a hook firing on `apps/web/src/x.ts` must find `apps/web`'s gates
- * rather than the root's. A repo with one config at its root is the same search, terminating
- * on the first step.
+ * one config per app, and a hook firing on `apps/web/src/x.ts` must find `apps/web`'s
+ * formatters rather than the root's. A repo with one config at its root is the same search,
+ * terminating on the first step.
+ *
+ * **The whole chain, not just the nearest, for the guards.** An app declares what its own
+ * lockfile and migrations are; the root declares what holds for the whole tree. A guard
+ * reading only the nearest would drop every root rule the moment an app grew a config of
+ * its own — and it would drop them silently, which is the only way these guards ever fail.
+ *
+ * `ceiling` is the session's project directory. Bounding the walk there rather than at the
+ * filesystem root keeps a checkout from inheriting rules out of whatever happens to sit
+ * above it. An empty `ceiling` walks to the root, which is what a caller wanting only the
+ * nearest config asks for.
  */
-export function findConfig(start) {
-  let dir = start || process.cwd();
+export function configChain(start, ceiling) {
+  const top = ceiling ? resolve(ceiling) : '';
+  let dir = resolve(start || process.cwd());
+  if (top && !within(dir, top)) dir = top;
+
   const { root } = parse(dir);
+  const found = [];
   for (;;) {
-    const candidate = join(dir, CONFIG_NAME);
-    try {
-      readFileSync(candidate);
-      return candidate;
-    } catch {
-      // Not here. Keep walking.
-    }
-    if (dir === root) return '';
+    if (hasConfig(dir)) found.push(join(dir, CONFIG_NAME));
+    if (top && within(top, dir)) return found; // Reached the ceiling.
+    if (dir === root) return found;
     const parent = dirname(dir);
-    if (parent === dir) return '';
+    if (parent === dir) return found;
     dir = parent;
   }
+}
+
+/** The nearest `harness.config.json` at or above `start`, or `''`. */
+export function findConfig(start) {
+  return configChain(start, '')[0] ?? '';
 }
 
 /** Every key a hook reads, with the value it takes when the config does not say. */
@@ -187,33 +218,36 @@ const HOOK_DEFAULTS = {
   formatters: [],
 };
 
-/**
- * The consuming repository's config, normalised.
- *
- * Returns `{ found, root, name, gates, hooks }`. **Never throws and never reports a
- * problem**: a hook that dies on a malformed config is a hook that stops enforcing, and
- * one that writes to stderr on every tool call is one that gets disabled. `found` is false
- * when there is no config or it does not parse, and each caller decides what that means —
- * `verify` has no gates to run, while `protect_paths` still applies its built-in floor.
- */
-export function loadConfig(cwd) {
-  const path = findConfig(cwd);
-  const empty = {
+/** The shape every reader gets when there is no config, or it does not parse. */
+function emptyConfig(root) {
+  return {
     found: false,
-    root: cwd || process.cwd(),
+    root: root || process.cwd(),
     name: '',
+    apps: [],
     gates: [],
     hooks: { ...HOOK_DEFAULTS },
   };
-  if (!path) return empty;
+}
 
+/**
+ * One `harness.config.json`, read from `path` and normalised.
+ *
+ * **Never throws and never reports a problem**: a hook that dies on a malformed config is a
+ * hook that stops enforcing, and one that writes to stderr on every tool call is one that
+ * gets disabled. `found` is false when the file does not parse, and each caller decides
+ * what that means — `verify` has no gates to run, while `protect_paths` still applies its
+ * built-in floor.
+ */
+function readConfig(path) {
+  const root = dirname(path);
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    return empty;
+    return emptyConfig(root);
   }
-  if (!parsed || typeof parsed !== 'object') return empty;
+  if (!parsed || typeof parsed !== 'object') return emptyConfig(root);
 
   const declared = parsed.hooks && typeof parsed.hooks === 'object' ? parsed.hooks : {};
   const hooks = { ...HOOK_DEFAULTS };
@@ -223,9 +257,35 @@ export function loadConfig(cwd) {
 
   return {
     found: true,
-    root: dirname(path),
+    root,
     name: typeof parsed.name === 'string' ? parsed.name : '',
+    // The repo-relative directories of a monorepo's apps, each holding a config of its
+    // own. Absent in a single-app repo, which is every repo layer A served before phase 6.
+    apps: Array.isArray(parsed.apps)
+      ? parsed.apps.filter((app) => typeof app === 'string' && app)
+      : [],
     gates: Array.isArray(parsed.gates) ? parsed.gates : [],
     hooks,
   };
+}
+
+/**
+ * The consuming repository's config, normalised. The nearest one at or above `cwd`.
+ *
+ * Returns `{ found, root, name, apps, gates, hooks }`.
+ */
+export function loadConfig(cwd) {
+  const path = findConfig(cwd);
+  return path ? readConfig(path) : emptyConfig(cwd);
+}
+
+/**
+ * Every config governing `start`, nearest first, bounded by the project directory.
+ *
+ * The guards read this rather than `loadConfig` so that a rule declared at the root still
+ * holds inside an app that declares rules of its own. Order is nearest-first, which is the
+ * order a reader would expect to see reasons reported in.
+ */
+export function loadConfigs(start, projectDir) {
+  return configChain(start, projectDir).map(readConfig);
 }

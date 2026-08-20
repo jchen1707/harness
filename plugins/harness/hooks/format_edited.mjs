@@ -23,13 +23,19 @@
  *   references an undefined name. `python-harness` spells that as
  *   `--unfixable F401` on its `ruff check --fix` entry, and pins the flag in its own suite;
  *   the equivalent in another toolchain belongs in that repo's config for the same reason.
+ *
+ * **The config is resolved from the edited file, not from the session.** In the monorepo
+ * phase 6 scaffolds, `apps/api/src/x.py` wants ruff and `apps/web/src/x.tsx` wants Prettier,
+ * and the root config knows neither. So each path finds the nearest `harness.config.json` at
+ * or above it and runs that one's formatters, in that one's directory. In a single-app repo
+ * the nearest config is the root's, which is what this always did.
  */
 
-import { extname, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig, readPayload, runArgv, shellSafe, toolPaths } from './lib.mjs';
+import { loadConfigs, readPayload, runArgv, shellSafe, toolPaths } from './lib.mjs';
 
 const TIMEOUT = 120_000;
 
@@ -54,21 +60,36 @@ export function commandsFor(formatters, path) {
   return commands;
 }
 
+/**
+ * The formatters that govern one edited path, and the absolute form to hand them.
+ *
+ * Absolute rather than as the harness spelled it: Claude reports a full path and Codex
+ * reports one relative to the repository root, and a command running in an app's directory
+ * would resolve the second against the wrong tree.
+ */
+export function formatPlan(raw, projectDir) {
+  const path = isAbsolute(raw) ? raw : join(projectDir || process.cwd(), raw);
+  const [config] = loadConfigs(dirname(path), projectDir);
+  return { path, config: config ?? null };
+}
+
 async function main() {
   const payload = await readPayload();
   if (!payload) return 0;
 
   const cwd = payload.cwd ?? '';
-  const { hooks } = loadConfig(cwd);
 
   for (const raw of toolPaths(payload)) {
+    const { path, config } = formatPlan(raw, cwd);
+    if (!config) continue; // Nothing declares a formatter for this file.
+
     // On Windows these commands go through `cmd.exe`, so a path carrying a shell
     // metacharacter would be interpreted rather than passed. Skipping is safe: this hook is
     // advisory, and a commit-time formatter sees the file again.
-    if (!shellSafe(raw)) continue;
+    if (!shellSafe(path)) continue;
 
-    for (const argv of commandsFor(hooks.formatters, raw)) {
-      runArgv(argv, { cwd, timeout: TIMEOUT });
+    for (const argv of commandsFor(config.hooks.formatters, path)) {
+      runArgv(argv, { cwd: config.root, timeout: TIMEOUT });
     }
   }
   return 0;
