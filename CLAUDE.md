@@ -88,19 +88,27 @@ Never hand-edit `main`. A change authored there is lost on the next regeneration
 plugins/harness/
 ├── .claude-plugin/plugin.json
 ├── agents/                       ← the eight shared review frames
-├── commands/                     ← the eight workflow commands
+├── commands/                     ← the eight workflow commands, plus /new-project
 ├── skills/                       ← full-review, verify, loop-goal, prune-rules,
 │                                    search-second-brain (+ an openai.yaml sidecar each)
 ├── workflows/full-review.js      ← the fan-out runner, config-driven
 ├── schema/                       ← harness.config.json's contract
 └── docs/agents/                  ← tracker, triage, domain, secret, testing and
                                      config doctrine
+templates/                        ← layer C: the scaffolds a new product repo is copied from
 scripts/vendor_sync.py            ← the second adapter: sync + freshness check
+scripts/new_project.py            ← applies a template; /new-project drives it
 scripts/check_submodules.py       ← the submodules match the branch you are on
 scripts/cross_stack.py            ← this layer A against each stack's own gates
 python-harness/                   ← submodule, for reading
 frontend-harness/                 ← submodule, for reading
 ```
+
+`templates/` is the one thing here that is neither delivered as a plugin nor vendored.
+A new product repository is copied from it once and owns the result; a stack never
+scaffolds from inside itself, so shipping a React skeleton to both of them would be weight
+nobody uses and a stale-pin alarm on every edit. `--agnostic` needs a checkout of this repo
+anyway — it runs `vendor_sync.py`, which cannot be vendored either. See `templates/README.md`.
 
 ## Half a definition each
 

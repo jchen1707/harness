@@ -36,12 +36,21 @@
  * declared gates it did **not** run, so a passing subset is never mistaken for the whole
  * Definition of Done.
  *
+ * **In a monorepo the gates dispatch by changed path.** A root config that names `apps`
+ * delegates: each app declares its own Definition of Done, and a turn runs the gates of the
+ * apps it actually touched. Running everything instead would make the monorepo cost what
+ * split repos cost — a Python test suite on a CSS change — and running one app's gates from
+ * the root would run them against the wrong tree. Which paths belong to which app needs no
+ * new key: an app's own `gatedPaths` already says, and a path *outside* the app that it
+ * names anyway — a shared contract package — is how both apps come to run when the contract
+ * between them changed.
+ *
  * Escape hatch: set `HARNESS_SKIP_VERIFY=1` to disable for a session. The legacy
  * `CLAUDE_SKIP_VERIFY` name remains supported — the gate is not Claude's, and naming it
  * after one harness is how the same escape hatch ended up with two names in two repos.
  */
 
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -111,6 +120,44 @@ export function skippedNote(gates) {
   return `\n\nGates this hook does not run, which are still part of the Definition of Done:\n${lines.join('\n')}`;
 }
 
+/**
+ * The configs whose gates this turn might have to satisfy, and the apps that declared none.
+ *
+ * One config in an ordinary repo — the one at the root, exactly as before `apps` existed.
+ * In a monorepo, one per app named in the root config, plus the root itself when it
+ * declares gates of its own.
+ *
+ * An app that names no config of its own is reported rather than skipped. `loadConfig`
+ * walks upward, so such an app would otherwise resolve to the root config and run the whole
+ * repo's gates from the wrong directory — a wrong answer wearing a green tick.
+ */
+export function dispatch(root) {
+  if (root.apps.length === 0) return { targets: [root], missing: [] };
+
+  const targets = [];
+  const missing = [];
+  for (const app of root.apps) {
+    const dir = join(root.root, app);
+    const config = loadConfig(dir);
+    if (config.found && resolve(config.root) === resolve(dir)) targets.push(config);
+    else missing.push(app);
+  }
+  // The root joins the list only when it has gates of its own. A router config that exists
+  // to name the apps has nothing to run, and an empty gate list would still cost a
+  // `git status`.
+  if (root.gates.length > 0) targets.unshift(root);
+  return { targets, missing };
+}
+
+/** One line naming the apps whose gates could not be found, or `''`. */
+export function missingNote(missing) {
+  if (missing.length === 0) return '';
+  return (
+    `\n\nApps named in the root harness.config.json with no config of their own, ` +
+    `whose gates did not run: ${missing.join(', ')}`
+  );
+}
+
 async function main() {
   if (process.env.HARNESS_SKIP_VERIFY === '1' || process.env.CLAUDE_SKIP_VERIFY === '1') return 0;
 
@@ -118,28 +165,40 @@ async function main() {
   if (!payload) return 0;
 
   const cwd = payload.cwd ?? '';
-  const config = loadConfig(cwd);
-  if (!config.found) return 0; // Nothing declares this repo's Definition of Done.
+  const root = loadConfig(cwd);
+  if (!root.found) return 0; // Nothing declares this repo's Definition of Done.
 
-  if (!gatedChange(cwd, config.hooks)) return 0;
+  const { targets, missing } = dispatch(root);
+  // Every gate the turn's changed paths put in scope, accumulated as the targets are
+  // walked so that a failure can name what it did not get to.
+  const considered = [];
 
-  const gates = config.gates.filter((gate) => gate && Array.isArray(gate.run));
-  for (const gate of gates) {
-    if (!STOP_KINDS.has(gate.kind)) continue;
+  for (const target of targets) {
+    if (!gatedChange(target.root, target.hooks)) continue;
 
-    const result = runArgv(gate.run, { cwd: config.root, timeout: GATE_TIMEOUT });
-    if (result.error) {
-      process.stderr.write(`Could not run \`${gate.name}\`: ${result.error.message}\n`);
-      return 0; // Tooling problem, not a code problem -> don't block.
-    }
-    if (result.status !== 0) {
-      const out = tail(result.stdout + result.stderr, MAX_LINES) || '(no output)';
-      // ASCII only - see protect_paths.mjs.
-      process.stderr.write(
-        `Definition of Done is failing at \`${gate.name}\`. Fix this before finishing. ` +
-          `Do not summarise the failure as if it were done.\n\n${out}${skippedNote(gates)}\n`,
-      );
-      return 2;
+    const gates = target.gates.filter((gate) => gate && Array.isArray(gate.run));
+    considered.push(...gates);
+    for (const gate of gates) {
+      if (!STOP_KINDS.has(gate.kind)) continue;
+
+      // In the app's own directory, which is where its commands are written to run.
+      const result = runArgv(gate.run, { cwd: target.root, timeout: GATE_TIMEOUT });
+      // Naming the app matters only when there is more than one to confuse.
+      const label = targets.length > 1 && target.name ? `${gate.name} (${target.name})` : gate.name;
+      if (result.error) {
+        process.stderr.write(`Could not run \`${label}\`: ${result.error.message}\n`);
+        return 0; // Tooling problem, not a code problem -> don't block.
+      }
+      if (result.status !== 0) {
+        const out = tail(result.stdout + result.stderr, MAX_LINES) || '(no output)';
+        // ASCII only - see protect_paths.mjs.
+        process.stderr.write(
+          `Definition of Done is failing at \`${label}\`. Fix this before finishing. ` +
+            `Do not summarise the failure as if it were done.\n\n${out}` +
+            `${skippedNote(considered)}${missingNote(missing)}\n`,
+        );
+        return 2;
+      }
     }
   }
   return 0;

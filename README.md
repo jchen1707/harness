@@ -39,15 +39,16 @@ python3 .../vendor_sync.py check --target . --harness /path/to/harness
 
 ## What is in it
 
-| Path                           | What                                                                                                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `plugins/harness/agents/`      | Eight shared review frames — standards, spec, security, tests, simplicity, design, speed, cost — plus `explorer`      |
-| `plugins/harness/commands/`    | The eight workflow commands: `/arch` `/context` `/implement-from-plan` `/lint` `/plan` `/retro` `/run` `/test`        |
-| `plugins/harness/skills/`      | `full-review`, `verify`, `loop-goal`, `prune-rules`, `search-second-brain`, each with an `agents/openai.yaml` sidecar |
-| `plugins/harness/workflows/`   | `full-review.js` — the fan-out runner                                                                                 |
-| `plugins/harness/schema/`      | The `harness.config.json` contract                                                                                    |
-| `plugins/harness/docs/agents/` | Issue tracker, triage labels, domain docs, secrets, testing and config doctrine                                       |
-| `plugins/harness/hooks/`       | The four enforcement hooks — write guard, secret guard, formatter, Stop gate — plus the distiller and their suite     |
+| Path                           | What                                                                                                                                |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `plugins/harness/agents/`      | Eight shared review frames — standards, spec, security, tests, simplicity, design, speed, cost — plus `explorer`                    |
+| `plugins/harness/commands/`    | The eight workflow commands: `/arch` `/context` `/implement-from-plan` `/lint` `/plan` `/retro` `/run` `/test`, plus `/new-project` |
+| `plugins/harness/skills/`      | `full-review`, `verify`, `loop-goal`, `prune-rules`, `search-second-brain`, each with an `agents/openai.yaml` sidecar               |
+| `plugins/harness/workflows/`   | `full-review.js` — the fan-out runner                                                                                               |
+| `plugins/harness/schema/`      | The `harness.config.json` contract                                                                                                  |
+| `plugins/harness/docs/agents/` | Issue tracker, triage labels, domain docs, secrets, testing and config doctrine                                                     |
+| `plugins/harness/hooks/`       | The four enforcement hooks — write guard, secret guard, formatter, Stop gate — plus the distiller and their suite                   |
+| `templates/`                   | The layer C scaffolds a new product repository is copied from. Not a plugin, not vendored — see `templates/README.md`               |
 
 The hooks are the one part of layer A that is executable rather than read. Claude Code loads
 them from the plugin at `${CLAUDE_PLUGIN_ROOT}`, which resolves the same in a main checkout,
@@ -64,6 +65,23 @@ which reviewer checklists to compose in. `plugins/harness/schema/` is the contra
 A reviewer is half a definition here and half in the stack: the frame is shared, the
 checklist at `docs/agents/subagents/<agent>.md` is the stack's. `full-review.js` joins
 them, and refuses to run an axis that resolves to neither.
+
+A monorepo declares one config per app and names them in the root's `apps`, which is what
+makes the gates dispatch: a turn that touched `apps/web` runs the web gates, and a change to
+the contract between the apps runs both. `scripts/check.py` scaffolds a project and drives
+the real Stop hook through all four of those answers, because a gate that did not run
+reports nothing at all.
+
+## Starting a new product repository
+
+```sh
+python3 scripts/new_project.py create acme-portal --api python --web react [--agnostic]
+```
+
+Two apps, a contract between them, and layer A wired in by one of the two adapters — the
+plugin by default, a vendored tree with `--agnostic`. `/new-project` is the command that
+drives it, and `templates/README.md` explains why the templates stay in this repository
+rather than travelling with layer A.
 
 ## Both stacks are mounted here, for reading
 

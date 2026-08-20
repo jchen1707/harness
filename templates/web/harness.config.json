@@ -1,0 +1,58 @@
+{
+  "name": "__PROJECT__-web",
+  "install": ["pnpm", "install"],
+  "dev": {
+    "run": ["pnpm", "dev"],
+    "url": "http://127.0.0.1:5173",
+    "readyCheck": "the page renders and reports the API as up or unreachable, not blank"
+  },
+  "gates": [
+    { "name": "eslint", "kind": "lint", "run": ["pnpm", "lint"] },
+    { "name": "prettier --check", "kind": "format", "run": ["pnpm", "format"] },
+    { "name": "tsc --noEmit", "kind": "types", "run": ["pnpm", "typecheck"] },
+    { "name": "vitest", "kind": "test", "run": ["pnpm", "test"] },
+    { "name": "vite build", "kind": "build", "run": ["pnpm", "build"] }
+  ],
+  "hooks": {
+    "gatedPaths": ["src", "../../packages/contracts"],
+    "gatedFiles": [
+      "package.json",
+      "tsconfig.json",
+      "vite.config.ts",
+      "harness.config.json",
+      "../../harness.config.json",
+      "../../.claude/settings.json"
+    ],
+    "gatedExtensions": [".ts", ".tsx", ".css", ".yaml"],
+    "protected": [
+      {
+        "glob": "pnpm-lock.yaml",
+        "why": "regenerate with `pnpm install`, never hand-edit",
+        "scope": "write"
+      },
+      {
+        "glob": "dist/**",
+        "why": "build output; change the source instead",
+        "scope": "write"
+      },
+      {
+        "glob": "**/*.gen.ts",
+        "why": "generated from the contract; change packages/contracts and regenerate",
+        "scope": "write"
+      }
+    ],
+    "formatters": [
+      {
+        "match": [".ts", ".tsx"],
+        "run": [
+          ["pnpm", "exec", "prettier", "--write"],
+          ["pnpm", "exec", "eslint", "--fix"]
+        ]
+      },
+      {
+        "match": [".md", ".json", ".css", ".html"],
+        "run": [["pnpm", "exec", "prettier", "--write"]]
+      }
+    ]
+  }
+}

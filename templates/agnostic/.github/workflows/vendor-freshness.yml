@@ -1,0 +1,43 @@
+# Layer A is vendored into this repository as ordinary committed files, pinned to a
+# `harness` commit. That is what makes it survive `git worktree add` and a sandbox, where a
+# submodule would be silently empty — but a copy nobody checks is exactly the drift that
+# arrangement exists to end.
+#
+# So the copy is checked. This job fails when the vendored tree has been edited by hand
+# (layer A is generated — edit it in `harness`) and when the pin has fallen behind.
+name: Vendored layer A
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Public by design: no credential is needed here, in CI or in a sandbox.
+      - name: Check out harness
+        uses: actions/checkout@v4
+        with:
+          repository: jchen1707/harness
+          ref: v2
+          path: .harness-check
+          fetch-depth: 0
+
+      # `check` needs origin/v2 present locally to measure how far behind the pin is.
+      - name: Fetch the harness source branch
+        working-directory: .harness-check
+        run: git fetch origin v2:refs/remotes/origin/v2 --force
+
+      - name: Verify the vendored copy is intact and current
+        run: |
+          python3 .harness-check/scripts/vendor_sync.py check \
+            --target . \
+            --harness .harness-check

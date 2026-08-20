@@ -1,0 +1,58 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|NotebookEdit|Bash|mcp__.*(edit|write|create|apply|read).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.agents/vendor/harness/hooks/protect_paths.mjs"],
+            "timeout": 30,
+            "statusMessage": "Checking protected paths…"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|mcp__.*(edit|write|create|apply).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.agents/vendor/harness/hooks/format_edited.mjs"],
+            "timeout": 120,
+            "statusMessage": "Formatting…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.agents/vendor/harness/hooks/verify.mjs"],
+            "timeout": 600,
+            "statusMessage": "Verifying Definition of Done…"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.agents/vendor/harness/hooks/session_learnings.mjs"],
+            "timeout": 300,
+            "statusMessage": "Distilling session learnings…"
+          }
+        ]
+      }
+    ]
+  }
+}
