@@ -4,12 +4,6 @@ The stack-neutral layer shared by [`python-harness`](https://github.com/jchen170
 and [`frontend-harness`](https://github.com/jchen1707/frontend-harness), owned in one place and
 delivered two ways.
 
-Both repos grew from one design and drifted. The same idea was being authored four times —
-twice per repository, once per branch — and the drift had already produced defects: a stale
-claim that Linear was reached with a personal API key, a claim that the two repos sat on
-different Linear workspaces when both pointed at the same gateway, and status-sync doctrine
-that existed on only one side. This repo removes the second copy so there is nothing to forget.
-
 ## Install (Claude Code)
 
 ```sh
