@@ -516,7 +516,10 @@ describe('Stop gate — mechanics', () => {
   });
 
   it('matches a gated file inside an app, and the root file it points up at', () => {
-    const hooks = { gatedFiles: ['harness.config.json', '../../.claude/settings.json'], gatedExtensions: [] };
+    const hooks = {
+      gatedFiles: ['harness.config.json', '../../.claude/settings.json'],
+      gatedExtensions: [],
+    };
     assert.ok(isGated('apps/web/harness.config.json', hooks, 'apps/web'));
     assert.ok(isGated('.claude/settings.json', hooks, 'apps/web'));
     assert.ok(!isGated('apps/api/harness.config.json', hooks, 'apps/web'));
