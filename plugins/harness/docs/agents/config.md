@@ -94,6 +94,11 @@ Three consequences worth knowing before you write one:
   generate from — is named by _both_ apps' `gatedPaths`, which is how a contract change comes
   to run both suites. A key mapping paths to apps would be a second authoring of the same
   fact.
+- **A `gatedPath` may point outside its app; a `protected` glob may not.** The first is a git
+  pathspec, so `../../packages/contracts` means what it says. The second is matched against
+  the path relative to the config that declared it, so a `../` glob can never match anything
+  — a shared file that must not be hand-edited is protected by the **root** config, which is
+  the one whose scope actually contains it.
 - **The guards read every config, the gates read one.** A gate answers "is this app green",
   which is a question about one app. A guard answers "may I touch this file", and an app
   declaring rules of its own must not cancel the root's — so `protected`, `allowed` and

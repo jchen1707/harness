@@ -34,9 +34,13 @@ python3 <harness>/scripts/new_project.py create <name> --api python --web react 
 - `--agnostic` vendors layer A into `.agents/vendor/harness/`, writes the Codex adapter, adds
   the freshness workflow and generates the discovery stubs. Without it, layer A arrives as
   the plugin: one line in `.claude/settings.json` and nothing in the tree.
-- `--split` is not implemented, deliberately. Two repositories are only survivable with a
-  published, versioned contract, and that seam is worth building against a real project's
-  constraints rather than guessing at them.
+- `--split` emits two repositories — `<name>-api` and `<name>-web` — joined by a published,
+  versioned contract. `--into` names their parent directory rather than a repository.
+  **Default to the monorepo.** One branch, one PR, one CI run, and a cross-cutting change
+  that lands atomically. Reach for `--split` only when an organisational constraint makes
+  that impossible: deploy cadences that cannot be gated together, different access
+  boundaries, separate review authority, or an api third parties consume on its own release
+  cycle. Every one of those is organisational, never a technical preference.
 
 ## Then, before you report success
 
@@ -48,6 +52,10 @@ cd apps/api && uv sync && uv run pytest
 cd apps/web && pnpm install && pnpm test
 ```
 
+The web app generates its contract types during `pnpm install`, so run the install before
+the typecheck and do not commit `src/contracts/types.gen.ts` — it is generated, gitignored,
+and regenerated on every install so that it cannot be older than the document it came from.
+
 If either fails, that is the scaffold's bug and it belongs upstream in `harness` — fix it
 there rather than patching the copy, or the next project inherits it.
 
@@ -55,6 +63,19 @@ there rather than patching the copy, or the next project inherits it.
 `/plugin marketplace add jchen1707/harness`, the `harness@harness` entry the default flavour
 writes resolves to nothing, and every shared command, agent and hook is silently absent —
 which is exactly how this went wrong in both stacks before.
+
+## If you scaffolded `--split`, finish the seam
+
+Two repositories are only survivable because the contract is published rather than copied,
+and two steps of that need a human:
+
+1. push the api repo and tag it `v0.1.0` — the release workflow emits the contract from the
+   handlers, refuses to publish one that disagrees with what is committed, and attaches it;
+2. set `repo` in the web repo's `contract.json` to `owner/name`, then `pnpm contract:update`.
+
+Until step 2 the web repo builds against the document seeded at scaffold time, which is the
+same one the api emits — so its gates pass, and nothing is broken. Say so rather than
+implying the seam is live.
 
 ## What the tree means
 
@@ -69,10 +90,7 @@ empty set.
 
 ## After a vendor sync
 
-`--agnostic` repositories carry one discovery stub per shared command and skill, so a harness
-that is not Claude Code can find them. Layer A gaining a command means a stub is missing, and
-nothing about that is loud. Regenerate them:
-
-```
-python3 <harness>/scripts/new_project.py stubs --target .
-```
+Nothing to do. `--agnostic` repositories carry one discovery stub per shared command and
+skill so that a harness which is not Claude Code can find them, and `vendor_sync.py sync`
+writes them — every time, including when layer A gains a command. A stub layer A no longer
+ships is removed with it; a skill the repository owns itself is never touched.

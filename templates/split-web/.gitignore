@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+.DS_Store
+
+# Generated from the pinned contract at install time. See src/contracts/README.md.
+src/contracts/types.gen.ts

@@ -48,6 +48,24 @@ PLUGIN_ROOT = "plugins/harness"
 VENDOR_DIR = Path(".agents/vendor/harness")
 MANIFEST_NAME = "MANIFEST.json"
 
+# Where a harness that discovers skills by directory looks. The vendored tree is not on
+# that path and nothing globs into it, so each shared command and skill needs a one-line
+# stub here pointing at the real one.
+STUB_DIR = Path(".agents/skills")
+TRANSFORM = Path(".agents/transform/transform.json")
+
+# The stub body, byte-for-byte as both stacks already carry it. Kept identical on purpose:
+# a reworded paragraph would rewrite twenty-seven committed files across two repositories
+# for no gain, and these are not covered by the manifest's sha check.
+STUB_BODY = (
+    "Read `{pointer}` in full and follow it.\n"
+    "\n"
+    "This file exists so a harness that discovers skills under `.agents/skills/` finds the\n"
+    "shared one. The body is layer A: generated, pinned by sha, and the same in every stack.\n"
+    "Editing it here is the drift the vendored copy's freshness check exists to catch \u2014 edit\n"
+    "it in [`harness`](https://github.com/jchen1707/harness) and re-sync.\n"
+)
+
 # The branch a consuming repo's own v2 vendors from. Its main uses the plugin instead.
 SOURCE_BRANCH = "v2"
 
@@ -158,6 +176,139 @@ def assert_clean(harness: Path) -> None:
         )
 
 
+def front_matter(text: str) -> list[str]:
+    """The lines between a leading `---` pair, verbatim. Empty when there is no block."""
+    if not text.startswith("---\n"):
+        return []
+    end = text.find("\n---", 4)
+    return text[4:end].split("\n") if end != -1 else []
+
+
+def shared_entries(target: Path) -> list[tuple[str, Path, str]]:
+    """`(name, source, pointer)` for every vendored command and skill, commands first.
+
+    The order is the one both stacks' drop lists already sit in, so reconciling one
+    reproduces the file rather than reshuffling it.
+    """
+    vendor = target / VENDOR_DIR
+    entries = [
+        (path.stem, path, f"{VENDOR_DIR.as_posix()}/commands/{path.name}")
+        for path in sorted((vendor / "commands").glob("*.md"))
+    ]
+    entries += [
+        (path.parent.name, path, f"{VENDOR_DIR.as_posix()}/skills/{path.parent.name}/SKILL.md")
+        for path in sorted((vendor / "skills").glob("*/SKILL.md"))
+    ]
+    return entries
+
+
+def stub_text(name: str, source: Path, pointer: str) -> str:
+    """One discovery stub: the shared file's own front matter, then the pointer.
+
+    The front matter is carried **verbatim** rather than rebuilt from two fields. A skill
+    declares `argument-hint` and sometimes `disable-model-invocation`, and a stub that
+    dropped them would be discovered and then behave differently from the thing it points
+    at -- which is worse than not being discovered, because nothing would look wrong.
+    Commands carry no `name`, so one is supplied.
+    """
+    fields = front_matter(source.read_text(encoding="utf-8"))
+    if not any(line.startswith("name:") for line in fields):
+        fields = [f"name: {name}", *fields]
+    return "---\n" + "\n".join(fields) + "\n---\n\n" + STUB_BODY.format(pointer=pointer)
+
+
+def is_layer_a_stub(path: Path) -> bool:
+    """True for a stub this script owns. The same test both stacks' suites already use."""
+    try:
+        return VENDOR_DIR.as_posix() in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def write_stubs(target: Path) -> tuple[list[str], list[str]]:
+    """Generate the discovery stubs, and remove the ones layer A no longer ships.
+
+    These were hand-maintained in both stacks until phase 6, which is one file per shared
+    command in every consuming repository, kept in step by memory. Adding `/new-project`
+    is what proved the cost: the omission is invisible locally and surfaces two repos away,
+    in the meta-repo's cross-stack job.
+
+    A repository's **own** skills are never touched. `is_layer_a_stub` is what separates
+    them, and it is the same test the stacks' own suites use, so there is one definition of
+    "this file is generated" rather than two that can disagree.
+    """
+    entries = shared_entries(target)
+    root = target / STUB_DIR
+    written = []
+    for name, source, pointer in entries:
+        stub = root / name / "SKILL.md"
+        text = stub_text(name, source, pointer)
+        if stub.exists() and stub.read_text(encoding="utf-8") == text:
+            continue
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text(text, encoding="utf-8")
+        written.append(name)
+
+    shipped = {name for name, _, _ in entries}
+    removed = []
+    if root.is_dir():
+        for path in sorted(root.glob("*/SKILL.md")):
+            if path.parent.name not in shipped and is_layer_a_stub(path):
+                shutil.rmtree(path.parent)
+                removed.append(path.parent.name)
+    return written, removed
+
+
+def reconcile_drop_list(target: Path, names: list[str]) -> list[str]:
+    """Keep `transform.json`'s per-stub drop entries equal to the set of stubs.
+
+    Only for a consumer that already drops stubs individually. `python-harness` does,
+    because its `.claude/skills` is a symlink to the whole directory: a stub that survives
+    the transform materialises on `main` beside the plugin's real skill, and nothing says
+    which of the two answers. `frontend-harness` drops `.agents` wholesale and needs none of
+    this, which is why the convention is detected rather than assumed.
+
+    The file is rewritten only when this script can reproduce it byte-for-byte first. That
+    guard matters more here than anywhere else in this repository: `blocks` entries quote
+    exact bytes of other files, and a rewrite that reflowed one would fail the main build
+    with a `TransformError` -- correctly, but for a reason nobody would connect to a sync.
+    """
+    path = target / TRANSFORM
+    if not path.exists():
+        return []
+    raw = path.read_text(encoding="utf-8")
+    try:
+        manifest = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+    drop = manifest.get("drop")
+    if not isinstance(drop, list):
+        return []
+    prefix = f"{Path('.claude/skills').as_posix()}/"
+    existing = [entry for entry in drop if isinstance(entry, str) and entry.startswith(prefix)]
+    if not existing:
+        return []  # This consumer does not use per-stub drops.
+
+    wanted = [f"{prefix}{name}" for name in names]
+    if existing == wanted:
+        return []
+
+    if json.dumps(manifest, indent=2, ensure_ascii=True) + "\n" != raw:
+        raise SystemExit(
+            f"refusing to edit {TRANSFORM}: this script cannot reproduce it byte-for-byte, "
+            f"so rewriting it would reformat rules that quote exact bytes of other files. "
+            f"Add these by hand: {', '.join(sorted(set(wanted) - set(existing)))}"
+        )
+
+    head = drop.index(existing[0])
+    manifest["drop"] = [
+        entry for entry in drop[:head] if entry not in existing
+    ] + wanted + [entry for entry in drop[head:] if entry not in existing]
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return sorted(set(wanted) ^ set(existing))
+
+
 def cmd_sync(harness: Path, target: Path) -> int:
     assert_clean(harness)
     files = source_files(harness)
@@ -176,9 +327,21 @@ def cmd_sync(harness: Path, target: Path) -> int:
     manifest = build_manifest(harness, files)
     (dest / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2) + "\n")
 
+    # The stubs are the other half of the delivery, and they were hand-maintained until
+    # this. A vendored command nothing points at is a command the consuming harness simply
+    # does not have, with no error anywhere saying why.
+    written, removed = write_stubs(target)
+    moved = reconcile_drop_list(target, [name for name, _, _ in shared_entries(target)])
+
     print(f"vendored {len(files)} file(s) into {VENDOR_DIR} at {manifest['sha'][:9]}")
     for f in files:
         print(f"  {f}")
+    if written:
+        print(f"wrote {len(written)} discovery stub(s) under {STUB_DIR}: {', '.join(written)}")
+    if removed:
+        print(f"removed {len(removed)} stub(s) layer A no longer ships: {', '.join(removed)}")
+    if moved:
+        print(f"reconciled {TRANSFORM}'s drop list: {', '.join(moved)}")
     return 0
 
 
@@ -240,6 +403,18 @@ def cmd_check(target: Path, harness: Path | None) -> int:
                 problems.extend(f"    changed upstream: {f}" for f in moved)
     else:
         print("note: harness checkout not supplied -- integrity checked, freshness not")
+
+    # The stubs, which live outside the vendored tree and so are not in the manifest. A
+    # missing one is the silent failure this whole mechanism exists to end, and a hand-edited
+    # one is the same drift as a hand-edited vendored file.
+    for name, source, pointer in shared_entries(target):
+        stub = target / STUB_DIR / name / "SKILL.md"
+        if not stub.exists():
+            problems.append(f"no discovery stub for {name} -- run `vendor_sync.py sync`")
+        elif stub.read_text(encoding="utf-8") != stub_text(name, source, pointer):
+            problems.append(
+                f"discovery stub edited by hand: {STUB_DIR}/{name}/SKILL.md -- it is generated"
+            )
 
     if problems:
         print("FAIL: vendored layer A is out of date with harness")

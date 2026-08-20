@@ -1,3 +1,12 @@
 dist
 coverage
 pnpm-lock.yaml
+
+# Generated from the contract at install time. Its formatting is the generator's business,
+# and gating it would make a generator upgrade fail the format gate for no defect.
+src/contracts/types.gen.ts
+
+# The api's document, exactly as it published it. It is an artifact this repo received, not
+# source it owns — reformatting it would put every `pnpm contract:update` in conflict with
+# the format gate. Split repositories only; harmless where the path does not exist.
+contracts/openapi.json

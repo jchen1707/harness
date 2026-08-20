@@ -102,6 +102,18 @@ export function relativePath(raw, projectDir) {
   return parts.join('/');
 }
 
+/**
+ * `dir` as a path relative to `root`, forward-slashed, or `''` when they are the same.
+ *
+ * The empty case is the one worth naming: `relativePath` strips a `root/` prefix, and a
+ * directory that *is* the root has no such prefix, so it would come back as an absolute
+ * path with its leading slash removed. Both callers -- the Stop gate's per-app prefix and
+ * the guards' per-config scope -- mean "nothing to prepend" there.
+ */
+export function repoRelative(dir, root) {
+  return resolve(dir) === resolve(root) ? '' : relativePath(dir, root);
+}
+
 /** Return every file path named by a file tool or a unified-patch call. */
 export function toolPaths(payload) {
   const direct = payload?.tool_input?.file_path;

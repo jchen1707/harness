@@ -29,7 +29,7 @@ select = ["E", "F", "I", "UP", "B", "S"]
 # its own discovery. A new top-level directory is silently unchecked while this stays
 # green - add it here in the same change that creates it.
 [tool.mypy]
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 strict = true
 
 [tool.pytest.ini_options]

@@ -195,6 +195,87 @@ def check_vendor_round_trip() -> None:
             ok("check catches an unrecognised vendored file")
 
 
+def check_discovery_stubs() -> None:
+    """The stubs are generated now, and the guard has to hold in three directions.
+
+    Until phase 6 these were hand-maintained: one file per shared command in every consuming
+    repository, kept in step by memory. The omission is invisible where it happens -- a
+    harness that discovers skills by directory simply does not have the command -- and shows
+    up two repositories away, in the cross-stack job. So `sync` writes them.
+
+    Three things have to be true, and each fails silently otherwise: a missing stub is
+    caught, a hand-edited one is caught, and a repository's **own** skills are left alone.
+    That last one is why `is_layer_a_stub` exists rather than a name list.
+    """
+    print("discovery stubs")
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "consumer"
+        target.mkdir()
+        source = Path(tmp) / "harness"
+        cloned = run(["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(source)], cwd=ROOT)
+        if cloned.returncode != 0:
+            fail(f"could not clone the harness: {cloned.stderr.strip()}")
+            return
+
+        synced = run(
+            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source), "--target", str(target)],
+            cwd=ROOT,
+        )
+        if synced.returncode != 0:
+            fail(f"sync failed: {(synced.stderr or synced.stdout).strip()}")
+            return
+
+        stubs = target / ".agents" / "skills"
+        shipped = sorted(p.name for p in stubs.glob("*") if (p / "SKILL.md").exists())
+        commands = sorted(p.stem for p in (ROOT / PLUGIN_DIR / "commands").glob("*.md"))
+        skills = sorted(p.parent.name for p in (ROOT / PLUGIN_DIR / "skills").glob("*/SKILL.md"))
+        if shipped != sorted(commands + skills):
+            fail(f"sync wrote stubs {shipped}, which is not every layer A command and skill")
+            return
+        ok(f"sync writes a stub for all {len(shipped)} shared commands and skills")
+
+        # A stub carries the shared file's own front matter. A skill declares an
+        # `argument-hint`, and a stub that dropped it would be discovered and then behave
+        # differently from the thing it points at.
+        hinted = next(
+            (name for name in skills
+             if "argument-hint" in (ROOT / PLUGIN_DIR / "skills" / name / "SKILL.md").read_text()),
+            "",
+        )
+        if hinted and "argument-hint" not in (stubs / hinted / "SKILL.md").read_text():
+            fail(f"the {hinted} stub dropped the front matter of the skill it points at")
+        elif hinted:
+            ok("a stub carries the front matter of the file it points at")
+
+        def check_target() -> subprocess.CompletedProcess[str]:
+            return run([sys.executable, str(VENDOR_SYNC), "check", "--target", str(target)], cwd=ROOT)
+
+        removed = stubs / commands[0]
+        shutil.rmtree(removed)
+        if check_target().returncode == 0:
+            fail("check passes with a missing stub -- the command would be silently absent")
+        else:
+            ok("check catches a missing stub")
+
+        # A repo's own skill must survive a sync. It is not layer A, and deleting somebody's
+        # work because it sits in the same directory would be the worst bug this file has.
+        own = stubs / "delivery"
+        own.mkdir(parents=True, exist_ok=True)
+        (own / "SKILL.md").write_text("---\nname: delivery\n---\n\nThis repo's own.\n")
+        run([sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source), "--target", str(target)], cwd=ROOT)
+        if not (own / "SKILL.md").exists():
+            fail("sync deleted a skill the consuming repo owns")
+        else:
+            ok("sync leaves a repo's own skill alone")
+
+        edited = stubs / commands[0] / "SKILL.md"
+        edited.write_text(edited.read_text() + "\nlocal edit\n")
+        if check_target().returncode == 0:
+            fail("check passes on a hand-edited stub -- it is generated, like the tree")
+        else:
+            ok("check catches a hand-edited stub")
+
+
 def check_vendor_freshness() -> None:
     """Freshness is measured on content, and both of its answers have to be right.
 
@@ -715,6 +796,40 @@ def check_templates() -> None:
             )
     ok(f"the monorepo template dispatches to {len(apps)} app(s)")
 
+    # The split shape's two overlays, and the seam that is the whole reason it is allowed to
+    # exist. Two repositories without a published contract are two hand-maintained
+    # descriptions of one thing, which is the failure this repository was created over.
+    for overlay in ("split-api", "split-web"):
+        if configs.get(overlay) is None:
+            fail(f"templates/{overlay} has no harness.config.json")
+
+    api_gates = {g["name"] for g in (configs.get("api") or {}).get("gates", [])}
+    split_gates = {g["name"] for g in (configs.get("split-api") or {}).get("gates", [])}
+    if api_gates != split_gates:
+        fail(
+            f"the api's gates differ between shapes: {sorted(api_gates ^ split_gates)}. "
+            f"Only the contract's path should change, never the Definition of Done."
+        )
+    else:
+        ok("both shapes of the api declare the same gates")
+
+    emitter = ROOT / "templates" / "api" / "scripts" / "emit_contract.py"
+    if not emitter.exists():
+        fail("the api template has no contract emitter -- the contract would be hand-written")
+    elif not (ROOT / "templates/contract/openapi.json").exists():
+        fail("there is no seed contract for a scaffold to start from")
+    else:
+        ok("the contract is emitted from the app in both shapes")
+
+    release = ROOT / "templates/split-api/.github/workflows/release-contract.yml"
+    pin = ROOT / "templates/split-web/contract.json"
+    if not release.exists() or not pin.exists():
+        fail("the split shape is missing the publish half or the pin half of its seam")
+    elif "emit_contract.py" not in release.read_text(encoding="utf-8"):
+        fail("the release workflow publishes a contract it did not re-emit and compare")
+    else:
+        ok("the split shape publishes a versioned contract and pins one")
+
     # One placeholder, and only one. A second spelling is how a scaffold ships a repository
     # with `__TEAM__` still in it, which nothing downstream would notice.
     strays = set()
@@ -769,6 +884,12 @@ def check_scaffold_dispatch() -> None:
             config["gates"] = [{"name": f"{app} probe", "kind": "test", "run": ["node", "gate.mjs"]}]
             (directory / "harness.config.json").write_text(json.dumps(config, indent=2) + "\n")
 
+        # Commit the probes. Each app gates its own `harness.config.json`, correctly -- so
+        # leaving the swap uncommitted would put every app in scope on every turn, and the
+        # experiment would measure the fixture instead of the dispatch.
+        run(["git", "add", "-A"], cwd=project)
+        run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "probes"], cwd=project)
+
         log = project / "ran.log"
 
         def turn(*touched: str) -> list[str]:
@@ -805,7 +926,10 @@ def check_scaffold_dispatch() -> None:
                 ("apps/web/src/health.ts",), ["web"],
             ),
             "a change to the shared contract runs both": (
-                ("packages/contracts/openapi.yaml",), ["api", "web"],
+                ("packages/contracts/openapi.json",), ["api", "web"],
+            ),
+            "a change to one app's own config runs that app, and not the other": (
+                ("apps/web/harness.config.json",), ["web"],
             ),
             "a change to the config that names the apps runs both": (
                 ("harness.config.json",), ["api", "web"],
@@ -889,6 +1013,7 @@ def main() -> int:
     check_manifests()
     if not manifests_only:
         check_vendor_round_trip()
+        check_discovery_stubs()
         check_vendor_freshness()
         check_generated_tree()
         check_shared_generator()

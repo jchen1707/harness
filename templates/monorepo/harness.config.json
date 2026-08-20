@@ -4,6 +4,11 @@
   "hooks": {
     "protected": [
       {
+        "glob": "packages/contracts/openapi.json",
+        "why": "generated from the api's handlers; run `uv run python scripts/emit_contract.py` in apps/api instead of editing it",
+        "scope": "write"
+      },
+      {
         "glob": ".agents/vendor/**",
         "why": "layer A is generated and pinned by sha; edit it in the harness repo and re-sync",
         "scope": "write"

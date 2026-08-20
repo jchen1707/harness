@@ -1,0 +1,3 @@
+# Generated from the contract at install time — never committed, so it cannot drift from
+# the schema it was generated out of. See src/contracts/README.md.
+src/contracts/types.gen.ts

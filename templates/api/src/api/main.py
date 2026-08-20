@@ -13,5 +13,5 @@ app = FastAPI(title="__PROJECT__")
 
 @app.get("/healthz")
 def healthz() -> Health:
-    """Liveness probe. The shape is `packages/contracts/openapi.yaml`'s `Health`."""
+    """Liveness probe. This docstring is the contract's description -- it is emitted."""
     return health()
