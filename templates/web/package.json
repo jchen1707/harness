@@ -11,7 +11,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "format": "prettier --check .",
-    "format:write": "prettier --write ."
+    "format:write": "prettier --write .",
+    "contract:types": "node scripts/contract-types.mjs",
+    "prepare": "pnpm contract:types",
+    "contract:update": "node scripts/update-contract.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",
@@ -24,6 +27,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^9.15.0",
+    "openapi-typescript": "^7.4.0",
     "prettier": "^3.4.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.16.0",

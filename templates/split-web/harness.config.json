@@ -34,14 +34,14 @@
     }
   ],
   "hooks": {
-    "gatedPaths": ["src", "../../packages/contracts"],
+    "gatedPaths": ["src", "scripts", "contracts"],
     "gatedFiles": [
       "package.json",
       "tsconfig.json",
       "vite.config.ts",
       "harness.config.json",
-      "../../harness.config.json",
-      "../../.claude/settings.json"
+      "contract.json",
+      ".claude/settings.json"
     ],
     "gatedExtensions": [".ts", ".tsx", ".css", ".json"],
     "protected": [
@@ -58,6 +58,11 @@
       {
         "glob": "**/*.gen.ts",
         "why": "generated from the contract; change packages/contracts and regenerate",
+        "scope": "write"
+      },
+      {
+        "glob": "contracts/openapi.json",
+        "why": "the api's released contract, fetched at the version contract.json pins; run `pnpm contract:update` instead of editing it",
         "scope": "write"
       }
     ],

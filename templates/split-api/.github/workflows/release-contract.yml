@@ -1,0 +1,44 @@
+# The contract, published as a versioned artifact.
+#
+# This is the seam the split shape depends on. The web repository pins a version and
+# generates its types from the document attached here, so a shape change reaches it as a
+# deliberate bump that either type-checks or does not — rather than as two hand-maintained
+# descriptions drifting with nothing to detect it.
+#
+# The document is emitted from the handlers, never hand-written, and this job refuses to
+# publish one that disagrees with what is committed.
+name: Release contract
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+
+      - run: uv sync
+
+      # The tag has to name a commit whose committed contract is the one the app emits.
+      # Publishing a stale document is worse than publishing none: a client pins it, its
+      # types compile, and the mismatch surfaces in production.
+      - name: The committed contract is what the app emits
+        run: |
+          uv run python scripts/emit_contract.py contracts/openapi.json
+          git diff --exit-code contracts/openapi.json
+
+      # `gh` is on the runner and authenticates with the job's own token, so this needs no
+      # third-party action and no secret of its own.
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" contracts/openapi.json --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" contracts/openapi.json --clobber

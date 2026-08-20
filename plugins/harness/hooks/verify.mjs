@@ -54,7 +54,7 @@ import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig, readPayload, run, runArgv, tail } from './lib.mjs';
+import { loadConfig, readPayload, repoRelative, run, runArgv, tail } from './lib.mjs';
 
 const MAX_LINES = 40;
 const GATE_TIMEOUT = 540_000;
@@ -81,9 +81,37 @@ export function porcelainPath(line) {
   return path.trim().replace(/^"|"$/g, '');
 }
 
-/** True if `path` is something the gates would read. */
-export function isGated(path, hooks) {
-  if (hooks.gatedFiles.includes(path)) return true;
+/**
+ * One declared path, as `git status` would spell it.
+ *
+ * `git status --porcelain` reports every path **relative to the repository root**, whatever
+ * directory it ran in — porcelain output is stable by definition, and `status.relativePaths`
+ * does not apply to it. A config declares its paths relative to itself, because that is the
+ * only spelling that makes sense next to the code. So one of the two has to be converted,
+ * and it is this one: `harness.config.json` in `apps/api` is `apps/api/harness.config.json`,
+ * and `../../harness.config.json` is the root's.
+ *
+ * Getting this wrong is silent in the worst direction. A `gatedFiles` entry that never
+ * matches does not error; the gate simply stops noticing that file.
+ */
+export function declaredPath(prefix, entry) {
+  const parts = [];
+  for (const part of `${prefix}/${entry}`.split('/')) {
+    if (part === '.' || part === '') continue;
+    if (part === '..' && parts.length > 0 && parts.at(-1) !== '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+
+/**
+ * True if `path` is something the gates would read.
+ *
+ * `prefix` is the config's own directory relative to the repository root — empty in a
+ * single-config repo, `apps/web` for an app in a monorepo.
+ */
+export function isGated(path, hooks, prefix = '') {
+  if (hooks.gatedFiles.some((entry) => declaredPath(prefix, entry) === path)) return true;
   return hooks.gatedExtensions.some((extension) => path.endsWith(extension));
 }
 
@@ -94,10 +122,12 @@ export function isGated(path, hooks) {
  * tree: a repo-wide `git status` in a large checkout is slow enough to notice on every
  * turn, and narrowing it here is what makes the filter affordable.
  */
-export function gatedChange(cwd, hooks) {
+export function gatedChange(cwd, hooks, prefix = '') {
   const pathspec = [...hooks.gatedPaths, ...hooks.gatedFiles];
   if (pathspec.length === 0) return false; // Nothing declared -> nothing to gate.
 
+  // The pathspec is resolved by git against `cwd`, so it is declared as written. The
+  // *output* is repo-root-relative regardless, which is what `prefix` reconciles.
   const result = run('git', ['status', '--porcelain', '--', ...pathspec], {
     cwd,
     timeout: 30_000,
@@ -107,7 +137,7 @@ export function gatedChange(cwd, hooks) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map(porcelainPath)
-    .some((path) => isGated(path, hooks));
+    .some((path) => isGated(path, hooks, prefix));
 }
 
 /** One line per declared gate this hook does not run, naming when it stops being optional. */
@@ -174,7 +204,9 @@ async function main() {
   const considered = [];
 
   for (const target of targets) {
-    if (!gatedChange(target.root, target.hooks)) continue;
+    // The target's own directory, as git spells the paths it reports.
+    const prefix = repoRelative(target.root, root.root);
+    if (!gatedChange(target.root, target.hooks, prefix)) continue;
 
     const gates = target.gates.filter((gate) => gate && Array.isArray(gate.run));
     considered.push(...gates);
