@@ -37,6 +37,28 @@ Vendoring's cost is staleness, and the answer is to make staleness loud rather t
 copies: the pin plus `scripts/vendor_sync.py check` in each consumer's CI reports "N commits
 behind" instead of drifting quietly.
 
+### Which ref the plugin carrier serves, and the two ways to lose it
+
+A marketplace is registered by repository, not by ref: `known_marketplaces.json` records a
+source and an install location and no branch, so the clone tracks the repository's **default
+branch** — `main` here, which is the Claude flavour, which is what the plugin path is for.
+A `v2` consumer is not short-changed by that: on `v2` layer A arrives vendored, and the
+plugin is an accelerator rather than the carrier.
+
+An individual marketplace _entry_ can pin a ref and a sha — the official marketplace does it
+throughout, as `{ "source": "git-subdir", "url": …, "ref": "v1.5.5", "sha": … }`. What cannot
+be addressed is two entries under one **name**: a consumer writes `<plugin>@<marketplace>`,
+so serving two refs at once would need two names, which is the fallback and is not needed
+while `v2` vendors.
+
+Two ways a session ends up with none of this, both quiet:
+
+- **`claude --bare`** skips hooks, plugin sync _and_ `CLAUDE.md` auto-discovery. Everything
+  runs; nothing enforces. It is a claude flag, not an `sbx` one — `sbx` has no such flag.
+- **A clone does not register a marketplace.** `/plugin marketplace add jchen1707/harness` is
+  one per-machine step, and defect 2 is what missing it looks like: an `enabledPlugins` line
+  that resolves to nothing.
+
 ## The stacks are mounted here, for reading
 
 ```
