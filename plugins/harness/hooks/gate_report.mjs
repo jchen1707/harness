@@ -18,7 +18,7 @@
  * silently — the single failure this repository exists to prevent.
  *
  * ```
- * node gate_report.mjs [--all] [--json] [--cwd <dir>]
+ * node gate_report.mjs [--all] [--json] [--base <ref>] [--cwd <dir>]
  * ```
  *
  * `--all` runs the `e2e`/`integration` gates too. Without it they are `not_applicable`,
@@ -26,6 +26,13 @@
  * flag, and the factory makes that decision from the agent's structured answer plus a
  * deterministic path check against `harness.config.json`'s own `gatedPaths` — never by
  * pattern-matching the diff here.
+ *
+ * `--base <ref>` switches the "did this app change?" check from `git status --porcelain`
+ * (uncommitted turn edits, what the Stop hook sees) to `git diff --name-only <base>..HEAD`
+ * (the committed change since a base ref). The factory passes this — it commits the agent's
+ * work before it verifies, so the working tree is clean and `git status` would see nothing;
+ * against the run's base ref the diff sees the change instead. The Stop hook never passes
+ * it, so its `gatedChange` is unchanged. See `gatedChangeSince` in `verify.mjs`.
  *
  * `--json` emits the document below. Without it, a compact human-readable summary goes to
  * stdout and the same exit code is returned, so an interactive run is legible without a
@@ -60,7 +67,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 import { loadConfig, repoRelative, runArgv, tail } from './lib.mjs';
-import { dispatch, gatedChange, STOP_KINDS } from './verify.mjs';
+import { dispatch, gatedChange, gatedChangeSince, STOP_KINDS } from './verify.mjs';
 
 const MAX_LINES = 40;
 const GATE_TIMEOUT = 540_000;
@@ -253,16 +260,19 @@ function timedRun(argv, options) {
 }
 
 /**
- * Parse the CLI flags. Deliberately tiny: `--all`, `--json`, `--cwd <dir>` (or `--cwd=<dir>`).
- * No abbreviations, no `--no-*` — a report's caller is a machine or a person who read the
- * help line above, and a forgiving parser is a parser that silently does the wrong thing.
+ * Parse the CLI flags. Deliberately tiny: `--all`, `--json`, `--base <ref>`, `--cwd <dir>`
+ * (or `--cwd=<dir>` / `--base=<ref>`). No abbreviations, no `--no-*` — a report's caller is a
+ * machine or a person who read the help line above, and a forgiving parser is a parser that
+ * silently does the wrong thing.
  */
-function parseArgs(argv) {
-  const args = { all: false, json: false, cwd: '' };
+export function parseArgs(argv) {
+  const args = { all: false, json: false, base: '', cwd: '' };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--all') args.all = true;
     else if (flag === '--json') args.json = true;
+    else if (flag === '--base') args.base = argv[++i] ?? '';
+    else if (flag.startsWith('--base=')) args.base = flag.slice('--base='.length);
     else if (flag === '--cwd') args.cwd = argv[++i] ?? '';
     else if (flag.startsWith('--cwd=')) args.cwd = flag.slice('--cwd='.length);
   }
@@ -298,7 +308,14 @@ async function main() {
     missing,
     all: args.all,
     isChanged: (target) =>
-      gatedChange(target.root, target.hooks, repoRelative(target.root, root.root)),
+      args.base
+        ? gatedChangeSince(
+            target.root,
+            target.hooks,
+            repoRelative(target.root, root.root),
+            args.base,
+          )
+        : gatedChange(target.root, target.hooks, repoRelative(target.root, root.root)),
     runGate: (gate, target) => timedRun(gate.run, { cwd: target.root, timeout: GATE_TIMEOUT }),
   });
 
