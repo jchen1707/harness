@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -53,6 +54,7 @@ import {
   declaredPath,
   dispatch,
   gatedChange,
+  gatedChangeSince,
   isGated,
   missingNote,
   porcelainPath,
@@ -65,6 +67,7 @@ import {
   classifyRun,
   computeVerdict,
   exitCode,
+  parseArgs,
 } from './gate_report.mjs';
 import {
   DISTILLER_MARKER,
@@ -540,6 +543,152 @@ describe('Stop gate — mechanics', () => {
   });
 });
 
+describe('gate report — base diff (factory post-commit)', () => {
+  // The defect this exists to pin: the factory commits the agent's work before it verifies,
+  // so the working tree is clean. `gatedChange` reads `git status --porcelain` (uncommitted
+  // edits) and sees nothing — every gate would be skipped_unchanged regardless of what the
+  // change touched. `gatedChangeSince` diffs `<base>..HEAD` and sees the committed change.
+  // A real run on BAC-5 found this; only a real run could, because the fakes in the suite
+  // above all inject `isChanged` directly and never exercised the post-commit tree.
+  const hooks = {
+    gatedPaths: ['src'],
+    gatedFiles: ['harness.config.json'],
+    gatedExtensions: ['.py'],
+  };
+
+  it('detects a committed gated change that a clean working tree hides from gatedChange', () => {
+    // Clean working tree: `git status` is empty (the work is committed).
+    const statusRunner = () => ({ status: 0, stdout: '', stderr: '', error: null });
+    assert.equal(gatedChangeWith(statusRunner, hooks), false); // the defect: nothing seen.
+
+    // Same change, now committed: `git diff <base>..HEAD` names it.
+    const diffRunner = (_cmd, args) => {
+      assert.equal(args[0], 'diff');
+      assert.ok(args.includes('origin/v2..HEAD'), 'diffs the base ref against HEAD');
+      return { status: 0, stdout: 'src/app/ai/retrieval/ingestion.py\n', stderr: '', error: null };
+    };
+    assert.equal(gatedChangeSinceWith(diffRunner, hooks, 'origin/v2'), true);
+  });
+
+  it('reads the destination of a rename, which is the file that exists', () => {
+    const diffRunner = () => ({
+      status: 0,
+      stdout: 'src/old.py\tsrc/new.py\n',
+      stderr: '',
+      error: null,
+    });
+    assert.equal(gatedChangeSinceWith(diffRunner, hooks, 'origin/v2'), true);
+  });
+
+  it('is false when the diff touches only ungated prose', () => {
+    const diffRunner = () => ({
+      status: 0,
+      stdout: 'docs/architecture.md\nREADME.md\n',
+      stderr: '',
+      error: null,
+    });
+    assert.equal(gatedChangeSinceWith(diffRunner, hooks, 'origin/v2'), false);
+  });
+
+  it('does not ask git anything when no base ref is given', () => {
+    let asked = false;
+    const runner = () => {
+      asked = true;
+      return { status: 0, stdout: '', stderr: '', error: null };
+    };
+    assert.equal(gatedChangeSinceWith(runner, hooks, ''), false);
+    assert.equal(asked, false);
+  });
+
+  it('does not block when git cannot produce the diff', () => {
+    const failing = () => ({ status: 1, stdout: '', stderr: 'boom', error: null });
+    assert.equal(gatedChangeSinceWith(failing, hooks, 'origin/v2'), false);
+  });
+
+  it('parses --base <ref> and --base=<ref>', () => {
+    assert.equal(parseArgs(['--base', 'origin/v2']).base, 'origin/v2');
+    assert.equal(parseArgs(['--base=origin/v2']).base, 'origin/v2');
+    assert.equal(parseArgs([]).base, '');
+    // Existing flags still parse alongside it.
+    const mixed = parseArgs(['--all', '--json', '--base', 'main', '--cwd', '/tmp']);
+    assert.equal(mixed.all && mixed.json, true);
+    assert.equal(mixed.base, 'main');
+    assert.equal(mixed.cwd, '/tmp');
+  });
+});
+
+describe('gate report — base diff integration (real git)', () => {
+  // The one test the fakes above cannot stand in for: run the real `gate_report.mjs --base`
+  // against a temp repo whose working tree is clean (the work is committed) and assert the
+  // gate *runs* rather than `skipped_unchanged`. On the unfixed code `--base` is ignored,
+  // `isChanged` falls back to `git status --porcelain` (empty, post-commit), and the gate is
+  // skipped — exactly the BAC-5 evidence-mismatch. This is the failing-first proof.
+  const hook = join(dirname(fileURLToPath(import.meta.url)), 'gate_report.mjs');
+  const gatesRoots = [];
+
+  function git(cwd, ...args) {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+    return r.stdout.trim();
+  }
+
+  function repo() {
+    const root = mkdtempSync(join(tmpdir(), 'gate-report-base-'));
+    gatesRoots.push(root);
+    const cfg = {
+      name: 'temp',
+      gates: [{ name: 'true-gate', kind: 'lint', run: ['true'] }],
+      hooks: { gatedPaths: ['src'], gatedFiles: [], gatedExtensions: ['.py'] },
+    };
+    writeFileSync(join(root, 'harness.config.json'), JSON.stringify(cfg));
+    git(root, 'init', '-q');
+    git(root, 'config', 'user.email', 't@t');
+    git(root, 'config', 'user.name', 't');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'base');
+    return root;
+  }
+
+  after(() => gatesRoots.forEach((d) => rmSync(d, { recursive: true, force: true })));
+
+  it('runs the gate for a committed change a clean working tree hides without --base', () => {
+    const root = repo();
+    // Add a gated file and commit it — the working tree is clean afterwards.
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'foo.py'), 'x = 1\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'add foo');
+    assert.equal(git(root, 'status', '--porcelain'), ''); // clean: git status sees nothing.
+
+    const base = git(root, 'rev-parse', 'HEAD~1');
+    const r = spawnSync('node', [hook, '--base', base, '--json', '--cwd', root], {
+      encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const report = JSON.parse(r.stdout);
+    assert.equal(report.verdict, 'pass');
+    assert.equal(report.gates[0].name, 'true-gate');
+    assert.equal(report.gates[0].status, 'pass', 'the committed change ran the gate');
+    assert.notEqual(report.gates[0].status, 'skipped_unchanged');
+  });
+
+  it('skips the gate when no --base is given and the working tree is clean', () => {
+    // The contrast that is the defect: without --base, a committed change is invisible to
+    // `git status`, so the gate is skipped_unchanged. This pins the behaviour the factory
+    // must not regress to once it always passes --base.
+    const root = repo();
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'foo.py'), 'x = 1\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'add foo');
+
+    const r = spawnSync('node', [hook, '--json', '--cwd', root], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const report = JSON.parse(r.stdout);
+    assert.equal(report.gates[0].status, 'skipped_unchanged');
+  });
+});
+
 /**
  * `gatedChange` shells out to git, which a unit test must not do. Rather than mock the
  * module, re-run its decision against an injected runner: the pathspec construction and the
@@ -554,6 +703,25 @@ function gatedChangeWith(runner, hooks) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map(porcelainPath)
+    .some((path) => isGated(path, hooks));
+}
+
+/**
+ * `gatedChangeSince` re-run against an injected runner, the same way `gatedChangeWith` keeps
+ * the Stop gate's pathspec test off the shell. This is the factory's post-commit path: it
+ * diffs `<base>..HEAD` instead of reading uncommitted `git status`, because the implement
+ * step has already committed the agent's work by the time verify runs.
+ */
+function gatedChangeSinceWith(runner, hooks, base) {
+  const pathspec = [...hooks.gatedPaths, ...hooks.gatedFiles];
+  if (pathspec.length === 0) return false;
+  if (!base) return false;
+  const result = runner('git', ['diff', '--name-only', `${base}..HEAD`, '--', ...pathspec]);
+  if (result.status !== 0) return false;
+  return result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => line.split('\t').pop())
     .some((path) => isGated(path, hooks));
 }
 
