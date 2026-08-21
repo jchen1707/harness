@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jchen1707/harness/blob/v2/plugins/harness/schema/review-findings.schema.json",
+  "title": "review findings",
+  "description": "The shape every reviewer axis returns, whether the review runs through the Claude `full-review` workflow or the Codex `codex exec --output-schema` path. One file, so the two paths cannot produce different finding shapes: an empty `findings` list is a valid and common result, and a finding carries the fields the synthesiser merges on. Extracted from `workflows/full-review.js` so the factory can hand the same schema to `codex exec --output-schema` without re-authoring it in Python.",
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The file the defect is in, as a repo-relative path."
+          },
+          "line": {
+            "type": "number",
+            "description": "The 1-based line the defect anchors to, when one does."
+          },
+          "severity": {
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "How bad the defect is, in the four tiers the synthesiser ranks by."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence naming the defect."
+          },
+          "why_it_matters": {
+            "type": "string",
+            "description": "One sentence on the consequence, for a reader who cannot see the code."
+          }
+        },
+        "required": ["file", "severity", "summary"]
+      }
+    }
+  }
+}

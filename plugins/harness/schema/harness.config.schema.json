@@ -103,6 +103,15 @@
         }
       }
     },
+    "tests": {
+      "type": "array",
+      "description": "Which files in this repository are tests, as git pathspecs. Declared because a check that needs to separate the test half of a diff from the implementation half cannot infer it: one stack keeps tests in a directory and the other colocates them beside the source. Omit it and any check that needs the split reports itself as unavailable rather than guessing \u2014 the same rule every gate that could not run follows.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "hooks": {
       "type": "object",
       "description": "What the shared hooks need from this repository. Layer A ships one implementation of the write guard, the secret guard, the formatter and the Stop gate; every path, extension and command they act on is declared here. Omit a key and that hook does nothing rather than guessing -- with one exception: protect_paths keeps a built-in floor of secret rules that no config can lower, because a guard that silently protects nothing when its config goes missing is worse than no guard at all.",

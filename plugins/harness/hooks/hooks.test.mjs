@@ -59,6 +59,14 @@ import {
   skippedNote,
 } from './verify.mjs';
 import {
+  EXIT,
+  REPORT_SCHEMA_VERSION,
+  buildReport,
+  classifyRun,
+  computeVerdict,
+  exitCode,
+} from './gate_report.mjs';
+import {
   DISTILLER_MARKER,
   LEGACY_OPENINGS,
   existingNote,
@@ -1047,6 +1055,379 @@ describe('second brain — one writer and one indexer', () => {
     assert.equal(
       describeNote('# Title\n\n- one thing\n- another thing\n'),
       'Title · one thing · another thing',
+    );
+  });
+});
+
+/**
+ * A fake gate run result — the shape `runArgv` returns, plus the `durationMs` a real run
+ * measures. `buildReport` takes `runGate` as an injection, so the report logic runs here
+ * against these with no `git` and no toolchain, the same way `gatedChangeWith` keeps the
+ * Stop gate's pathspec test off the shell.
+ */
+function runResult(status, { stdout = '', stderr = '', error = null } = {}) {
+  return { status, stdout, stderr, error, durationMs: 9 };
+}
+
+/** A single-config repo dispatched, ready to hand to `buildReport`. */
+function dispatched(raw) {
+  const root = normalise(raw);
+  return { root, ...dispatch(root) };
+}
+
+/** Build a report for `rootDir` with injected side effects, so no subprocess runs. */
+function reportFrom(
+  rootDir,
+  { all = false, changed = () => true, runGate = () => runResult(0) } = {},
+) {
+  const root = loadConfig(rootDir);
+  const { targets, missing } = dispatch(root);
+  return buildReport({ root, targets, missing, all, isChanged: changed, runGate });
+}
+
+describe('gate report — classification', () => {
+  it('classifies a gate that started and exited zero as pass', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'g', kind: 'lint', run: ['true'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0, { stdout: 'all good\n' }),
+    });
+    assert.equal(report.gates[0].status, 'pass');
+    assert.equal(report.gates[0].exit, 0);
+    assert.equal(report.gates[0].outputTail, ''); // A pass carries no output tail.
+    assert.equal(report.gates[0].durationMs, 9);
+  });
+
+  it('classifies a non-zero exit as fail and captures the tail of its output', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'g', kind: 'test', run: ['false'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(1, { stdout: 'line1\nline2\nFAILED here\n' }),
+    });
+    assert.equal(report.gates[0].status, 'fail');
+    assert.equal(report.gates[0].exit, 1);
+    assert.match(report.gates[0].outputTail, /FAILED here/);
+  });
+
+  it('classifies a process that could not be spawned as unavailable, not fail', () => {
+    // The case verify.mjs swallows (it returns 0 so a tooling problem does not wedge the
+    // turn) and a report must not. `unavailable` is the whole reason `verdict: incomplete`
+    // exists — a green exit code must not stand in for "the gate could not run."
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'g', kind: 'build', run: ['missing-binary-xyz'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(null, { error: new Error('spawnSync missing-binary-xyz') }),
+    });
+    assert.equal(report.gates[0].status, 'unavailable');
+    assert.equal(report.gates[0].exit, null); // No process, no exit code.
+    assert.match(report.gates[0].outputTail, /spawnSync missing-binary-xyz/);
+  });
+
+  it('classifies the error from a run result directly', () => {
+    assert.equal(classifyRun({ status: 0, error: null }), 'pass');
+    assert.equal(classifyRun({ status: 2, error: null }), 'fail');
+    assert.equal(classifyRun({ status: null, error: new Error('x') }), 'unavailable');
+  });
+
+  it('marks e2e and integration not_applicable without --all, and runs them with it', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'playwright', kind: 'e2e', run: ['pw'], when: 'the change is user-visible' },
+        { name: 'pg', kind: 'integration', run: ['pg'], when: 'the change touches a migration' },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const off = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.deepEqual(
+      off.gates.map((g) => g.status),
+      ['not_applicable', 'not_applicable'],
+    );
+    // The `when` clause travels with the row, so a reader knows when it stops being optional.
+    assert.equal(off.gates[0].when, 'the change is user-visible');
+
+    const on = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.deepEqual(
+      on.gates.map((g) => g.status),
+      ['pass', 'pass'],
+    );
+  });
+
+  it('marks every gate of an untouched app skipped_unchanged', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'g', kind: 'lint', run: ['true'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => false, // gatedChange() was false — the turn touched nothing gated.
+      runGate: () => {
+        throw new Error('an untouched app must not run its gates');
+      },
+    });
+    assert.equal(report.gates[0].status, 'skipped_unchanged');
+    assert.equal(report.gates[0].exit, null);
+  });
+
+  it('carries a gate caveat and when through to the entry', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        {
+          name: 'mypy',
+          kind: 'types',
+          run: ['mypy'],
+          caveat: 'checks only the paths in pyproject; a new dir is silently unchecked',
+        },
+        { name: 'pw', kind: 'e2e', run: ['pw'], when: 'user-visible' },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.equal(
+      report.gates[0].caveat,
+      'checks only the paths in pyproject; a new dir is silently unchecked',
+    );
+    assert.equal(report.gates[0].when, null);
+    assert.equal(report.gates[1].when, 'user-visible');
+    assert.equal(report.gates[1].caveat, null);
+  });
+});
+
+describe('gate report — verdict and exit codes', () => {
+  it('is pass (exit 0) when every gate that ran passed or was not applicable', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'g', kind: 'lint', run: ['true'] },
+        { name: 'pw', kind: 'e2e', run: ['pw'], when: 'user-visible' },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.equal(report.verdict, 'pass');
+    assert.equal(exitCode(report.verdict), 0);
+  });
+
+  it('is fail (exit 1) when any gate failed', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'ok', kind: 'lint', run: ['true'] },
+        { name: 'bad', kind: 'test', run: ['false'] },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: (gate) => (gate.name === 'bad' ? runResult(1) : runResult(0)),
+    });
+    assert.equal(report.verdict, 'fail');
+    assert.equal(exitCode(report.verdict), 1);
+  });
+
+  it('is incomplete (exit 3) when a gate was unavailable, even with no failures', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'ok', kind: 'lint', run: ['true'] },
+        { name: 'missing', kind: 'build', run: ['nope'] },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: (gate) =>
+        gate.name === 'missing' ? runResult(null, { error: new Error('x') }) : runResult(0),
+    });
+    assert.equal(report.verdict, 'incomplete');
+    assert.equal(exitCode(report.verdict), 3);
+  });
+
+  it('is incomplete (exit 3) when an app named in the root config had no config of its own', () => {
+    const root = repoWith({ '': ROUTER, 'apps/api': API });
+    mkdirSync(join(root, 'apps', 'web'), { recursive: true }); // named, but no config
+    const report = reportFrom(root, { changed: () => true, runGate: () => runResult(0) });
+    assert.deepEqual(report.missingApps, ['apps/web']);
+    assert.equal(report.verdict, 'incomplete');
+    assert.equal(exitCode(report.verdict), 3);
+  });
+
+  it('lets a real fail outrank incomplete, so the exit code names the actionable signal', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'bad', kind: 'test', run: ['false'] },
+        { name: 'missing', kind: 'build', run: ['nope'] },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: (gate) =>
+        gate.name === 'bad' ? runResult(1) : runResult(null, { error: new Error('x') }),
+    });
+    assert.equal(report.verdict, 'fail');
+    assert.equal(exitCode(report.verdict), 1);
+  });
+
+  it('computes the verdict from gate statuses and missing apps directly', () => {
+    assert.equal(computeVerdict([{ status: 'pass' }], []), 'pass');
+    assert.equal(
+      computeVerdict([{ status: 'not_applicable' }, { status: 'skipped_unchanged' }], []),
+      'pass',
+    );
+    assert.equal(computeVerdict([{ status: 'pass' }, { status: 'fail' }], []), 'fail');
+    assert.equal(computeVerdict([{ status: 'pass' }, { status: 'unavailable' }], []), 'incomplete');
+    assert.equal(computeVerdict([{ status: 'pass' }], ['apps/web']), 'incomplete');
+    assert.equal(
+      computeVerdict([{ status: 'fail' }, { status: 'unavailable' }], ['apps/web']),
+      'fail',
+    );
+  });
+
+  it('maps the three verdicts to distinct exit codes 0/1/3', () => {
+    assert.deepEqual(EXIT, { pass: 0, fail: 1, incomplete: 3 });
+    assert.equal(exitCode('pass'), 0);
+    assert.equal(exitCode('fail'), 1);
+    assert.equal(exitCode('incomplete'), 3);
+  });
+});
+
+describe('gate report — monorepo dispatch', () => {
+  it('runs the touched app gates, skips the untouched app, and names both targets', () => {
+    const root = repoWith(MONOREPO);
+    const report = reportFrom(root, {
+      changed: (target) => target.name === 'api',
+      runGate: () => runResult(0),
+    });
+
+    // The touched app ran; the untouched app's gates are skipped_unchanged.
+    const byName = Object.fromEntries(report.gates.map((g) => [g.name, g.status]));
+    assert.equal(byName.pytest, 'pass'); // api's gate, ran
+    assert.equal(byName.vitest, 'skipped_unchanged'); // web's gate, the turn touched no web path
+
+    // Both apps appear as targets with their repo-relative dirs; the root is not a target
+    // because the router config declares no gates of its own.
+    assert.deepEqual(
+      report.targets.map((t) => [t.name, t.dir]),
+      [
+        ['api', 'apps/api'],
+        ['web', 'apps/web'],
+      ],
+    );
+    assert.deepEqual(report.missingApps, []);
+    assert.equal(report.verdict, 'pass');
+  });
+
+  it('runs the root gates first when the root declares gates of its own', () => {
+    const root = repoWith({
+      ...MONOREPO,
+      '': { ...ROUTER, gates: [{ name: 'prettier', kind: 'format', run: ['pnpm', 'format'] }] },
+    });
+    const report = reportFrom(root, { changed: () => true, runGate: () => runResult(0) });
+    assert.deepEqual(
+      report.targets.map((t) => t.name),
+      ['acme-portal', 'api', 'web'],
+    );
+  });
+
+  it('routes each gate through its own app, so a Python suite never runs on a CSS change', () => {
+    const root = repoWith(MONOREPO);
+    const ranIn = [];
+    const report = reportFrom(root, {
+      changed: () => true, // both apps touched
+      runGate: (gate, target) => {
+        ranIn.push([gate.name, target.name]);
+        return runResult(0);
+      },
+    });
+    // Each gate ran in its own app's target, not all from the root.
+    assert.ok(ranIn.some(([g, t]) => g === 'pytest' && t === 'api'));
+    assert.ok(ranIn.some(([g, t]) => g === 'vitest' && t === 'web'));
+    assert.equal(report.verdict, 'pass');
+  });
+});
+
+describe('gate report — document shape', () => {
+  it('emits the schema version, root, targets, missingApps, gates and verdict', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'g', kind: 'lint', run: ['true'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.equal(report.schemaVersion, REPORT_SCHEMA_VERSION);
+    assert.equal(report.root, root.root);
+    assert.deepEqual(report.targets, [{ name: 'solo', dir: '.' }]);
+    assert.deepEqual(report.missingApps, []);
+    assert.deepEqual(
+      Object.keys(report.gates[0]).sort(),
+      ['caveat', 'durationMs', 'exit', 'kind', 'name', 'outputTail', 'status', 'when'].sort(),
     );
   });
 });
