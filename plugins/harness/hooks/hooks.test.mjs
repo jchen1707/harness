@@ -1458,6 +1458,81 @@ describe('gate report — classification', () => {
     );
   });
 
+  it('reports a gate with enabled:false as disabled, and never runs it', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'eslint', kind: 'lint', run: ['lint'] },
+        { name: 'lighthouse', kind: 'integration', run: ['lhci'], enabled: false },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const ran = [];
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      all: true, // even a blanket assertion must not switch a disabled gate back on
+      gates: ['lighthouse'], // nor an explicit one
+      isChanged: () => true,
+      runGate: (gate) => {
+        ran.push(gate.name);
+        return runResult(0);
+      },
+    });
+    assert.deepEqual(
+      report.gates.map((g) => [g.name, g.status]),
+      [
+        ['eslint', 'pass'],
+        ['lighthouse', 'disabled'],
+      ],
+    );
+    assert.deepEqual(ran, ['eslint'], 'a disabled gate must not execute');
+    // Off is not broken: a disabled gate cannot drag the verdict to fail or incomplete.
+    assert.equal(report.verdict, 'pass');
+  });
+
+  it('still reports a disabled gate when the app was unchanged', () => {
+    // `disabled` outranks `skipped_unchanged`: the operator's answer does not depend on
+    // what the turn happened to touch, and a reader comparing two reports should not see
+    // a gate's reason for not running flicker.
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'lighthouse', kind: 'integration', run: ['lhci'], enabled: false }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => false,
+      runGate: () => runResult(0),
+    });
+    assert.equal(report.gates[0].status, 'disabled');
+  });
+
+  it('treats an absent or true `enabled` as on', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'absent', kind: 'lint', run: ['a'] },
+        { name: 'explicit', kind: 'lint', run: ['b'], enabled: true },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.deepEqual(
+      report.gates.map((g) => g.status),
+      ['pass', 'pass'],
+    );
+  });
+
   it('marks every gate of an untouched app skipped_unchanged', () => {
     const { root, targets, missing } = dispatched({
       name: 'solo',
