@@ -18,14 +18,27 @@
  * silently — the single failure this repository exists to prevent.
  *
  * ```
- * node gate_report.mjs [--all] [--json] [--base <ref>] [--cwd <dir>]
+ * node gate_report.mjs [--gate <name>]... [--all] [--json] [--base <ref>] [--cwd <dir>]
  * ```
  *
- * `--all` runs the `e2e`/`integration` gates too. Without it they are `not_applicable`,
- * because opt-in is not optional: the caller asserts a gate's `when` clause by passing this
- * flag, and the factory makes that decision from the agent's structured answer plus a
- * deterministic path check against `harness.config.json`'s own `gatedPaths` — never by
- * pattern-matching the diff here.
+ * The `e2e`/`integration` gates are opt-in: without an assertion they are `not_applicable`,
+ * because opt-in is not optional — the caller asserts a gate's `when` clause, and the factory
+ * makes that decision from the agent's structured answer cross-checked by name against
+ * `harness.config.json`'s own gates, never by pattern-matching the diff here.
+ *
+ * `--gate <name>` asserts **one** opt-in gate, and is repeatable. This is the form a machine
+ * caller should use, because a `when` clause is prose (`"performance or accessibility budgets
+ * are in scope"`) and nothing here can evaluate it — only the caller knows whether it holds,
+ * and it holds per gate, not per run.
+ *
+ * `--all` asserts **every** opt-in gate at once. It is the interactive form — a human who
+ * wants the full suite — and it is deliberately blunt: it does not re-read `when`, so it
+ * asserts clauses the caller may not have meant. Measured on frontend-harness FRO-7,
+ * 2026-08-22: an agent that honestly ran `playwright` forced `lighthouse` to run too, whose
+ * `when` was plainly false for the change and which cannot pass on that machine at all
+ * (its own caveat: the performance category scores null against the installed Chrome). The
+ * run blocked on a gate that should never have executed. `--gate` is the repair; `--all`
+ * keeps its meaning for the caller who really does want all of them.
  *
  * `--base <ref>` switches the "did this app change?" check from `git status --porcelain`
  * (uncommitted turn edits, what the Stop hook sees) to `git diff --name-only <base>..HEAD`
@@ -45,7 +58,7 @@
  * | `pass` | exit 0, and the gate actually started |
  * | `fail` | non-zero exit |
  * | `unavailable` | the process could not be spawned (`result.error`) — the case `verify.mjs` must swallow and a report must not |
- * | `not_applicable` | `kind` is `e2e`/`integration`, no `--all`, and the `when` clause was not asserted by the caller |
+ * | `not_applicable` | `kind` is `e2e`/`integration` and the caller asserted neither `--gate <name>` nor `--all` |
  * | `skipped_unchanged` | the app's `gatedChange()` was false — a monorepo app the turn never touched |
  *
  * ## The verdict
@@ -204,12 +217,26 @@ export function exitCode(verdict) {
  * @param {Object} args.root - The root config, as `loadConfig` returns it.
  * @param {Object[]} args.targets - The dispatched targets, as `dispatch` returns them.
  * @param {string[]} args.missing - Apps named in the root config with no config of their own.
- * @param {boolean} [args.all=false] - Whether the caller asserted the opt-in `when` clauses.
+ * @param {boolean} [args.all=false] - Whether the caller asserted every opt-in `when` clause.
+ * @param {string[]} [args.gates=[]] - Opt-in gate names the caller asserted individually.
  * @param {(target: Object) => boolean} args.isChanged
  * @param {(gate: Object, target: Object) => GateRun} args.runGate
  * @returns {Object} the JSON document
  */
-export function buildReport({ root, targets, missing, all = false, isChanged, runGate }) {
+export function buildReport({
+  root,
+  targets,
+  missing,
+  all = false,
+  gates: asserted = [],
+  isChanged,
+  runGate,
+}) {
+  // Names, not indices: a monorepo dispatches the same gate name across several targets and
+  // the caller asserts the gate, not one app's copy of it. An asserted name that no config
+  // declares is inert rather than an error — the caller named a gate this repo does not have,
+  // which is the same nothing as not naming it.
+  const assertedNames = new Set(asserted);
   const gates = [];
   for (const target of targets) {
     const prefix = repoRelative(target.root, root.root);
@@ -226,8 +253,12 @@ export function buildReport({ root, targets, missing, all = false, isChanged, ru
       // The opt-in kinds are exactly the ones the Stop hook does not run — the complement
       // of `STOP_KINDS` — so this reuses layer A's own line rather than re-authoring the
       // e2e/integration list here. A new opt-in kind added to the enum is `not_applicable`
-      // without `--all` automatically, the same way it stops being a Stop gate.
-      if (!STOP_KINDS.has(gate.kind) && !all) {
+      // unasserted automatically, the same way it stops being a Stop gate.
+      //
+      // Asserted per gate first, then the blanket `--all`. That order is the whole fix:
+      // a caller naming `playwright` gets `playwright`, and does not silently also assert
+      // `lighthouse`'s unrelated `when` clause.
+      if (!STOP_KINDS.has(gate.kind) && !all && !assertedNames.has(gate.name)) {
         gates.push(gateEntry(gate, 'not_applicable', null));
         continue;
       }
@@ -260,16 +291,25 @@ function timedRun(argv, options) {
 }
 
 /**
- * Parse the CLI flags. Deliberately tiny: `--all`, `--json`, `--base <ref>`, `--cwd <dir>`
- * (or `--cwd=<dir>` / `--base=<ref>`). No abbreviations, no `--no-*` — a report's caller is a
- * machine or a person who read the help line above, and a forgiving parser is a parser that
- * silently does the wrong thing.
+ * Parse the CLI flags. Deliberately tiny: `--gate <name>` (repeatable), `--all`, `--json`,
+ * `--base <ref>`, `--cwd <dir>` (or `--gate=<name>` / `--cwd=<dir>` / `--base=<ref>`). No
+ * abbreviations, no `--no-*` — a report's caller is a machine or a person who read the help
+ * line above, and a forgiving parser is a parser that silently does the wrong thing.
+ *
+ * An empty `--gate` value is dropped rather than asserting a gate named `''`: the argv came
+ * from a caller interpolating a name it did not have, and asserting nothing is the honest
+ * reading of that.
  */
 export function parseArgs(argv) {
-  const args = { all: false, json: false, base: '', cwd: '' };
+  const args = { all: false, gates: [], json: false, base: '', cwd: '' };
+  const addGate = (name) => {
+    if (name) args.gates.push(name);
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--all') args.all = true;
+    else if (flag === '--gate') addGate(argv[++i] ?? '');
+    else if (flag.startsWith('--gate=')) addGate(flag.slice('--gate='.length));
     else if (flag === '--json') args.json = true;
     else if (flag === '--base') args.base = argv[++i] ?? '';
     else if (flag.startsWith('--base=')) args.base = flag.slice('--base='.length);
@@ -307,6 +347,7 @@ async function main() {
     targets,
     missing,
     all: args.all,
+    gates: args.gates,
     isChanged: (target) =>
       args.base
         ? gatedChangeSince(
