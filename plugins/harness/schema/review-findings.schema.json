@@ -15,19 +15,11 @@
             "description": "The file the defect is in, as a repo-relative path."
           },
           "line": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": ["number", "null"],
             "description": "The 1-based line the defect anchors to, or null when it anchors to no single line."
           },
           "severity": {
-            "enum": [
-              "critical",
-              "high",
-              "medium",
-              "low"
-            ],
+            "enum": ["critical", "high", "medium", "low"],
             "description": "How bad the defect is, in the four tiers the synthesiser ranks by."
           },
           "summary": {
@@ -35,27 +27,16 @@
             "description": "One sentence naming the defect."
           },
           "why_it_matters": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": ["string", "null"],
             "description": "One sentence on the consequence, for a reader who cannot see the code; null when the summary says it all."
           }
         },
-        "required": [
-          "file",
-          "line",
-          "severity",
-          "summary",
-          "why_it_matters"
-        ],
+        "required": ["file", "line", "severity", "summary", "why_it_matters"],
         "additionalProperties": false
       },
       "description": "Every real defect this axis found in the diff. An empty list is valid and common."
     }
   },
-  "required": [
-    "findings"
-  ],
+  "required": ["findings"],
   "additionalProperties": false
 }
