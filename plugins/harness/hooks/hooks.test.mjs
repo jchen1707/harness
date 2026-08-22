@@ -610,6 +610,19 @@ describe('gate report — base diff (factory post-commit)', () => {
     assert.equal(parseArgs(['--base=origin/v2']).base, 'origin/v2');
     assert.equal(parseArgs([]).base, '');
     // Existing flags still parse alongside it.
+    assert.deepEqual(parseArgs(['--gate', 'playwright']).gates, ['playwright']);
+    assert.deepEqual(parseArgs(['--gate=playwright']).gates, ['playwright']);
+    assert.deepEqual(
+      parseArgs(['--gate', 'playwright', '--gate', 'pg']).gates,
+      ['playwright', 'pg'],
+      'repeatable, and order is preserved',
+    );
+    assert.deepEqual(parseArgs([]).gates, []);
+    // An empty value asserts nothing rather than a gate named ''. The argv came from a
+    // caller interpolating a name it did not have.
+    assert.deepEqual(parseArgs(['--gate', '']).gates, []);
+    assert.deepEqual(parseArgs(['--gate=']).gates, []);
+
     const mixed = parseArgs(['--all', '--json', '--base', 'main', '--cwd', '/tmp']);
     assert.equal(mixed.all && mixed.json, true);
     assert.equal(mixed.base, 'main');
@@ -1352,6 +1365,96 @@ describe('gate report — classification', () => {
     assert.deepEqual(
       on.gates.map((g) => g.status),
       ['pass', 'pass'],
+    );
+  });
+
+  it('asserts exactly the opt-in gates named by --gate, and no others', () => {
+    // The FRO-7 case, as a test. An agent that honestly ran `playwright` must not thereby
+    // assert `lighthouse`'s unrelated `when` clause — which is prose nothing here can
+    // evaluate, and which was false for that change. Before per-gate assertion the only
+    // way to run one opt-in gate was `--all`, which ran both.
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'playwright', kind: 'e2e', run: ['pw'], when: 'the change is user-visible' },
+        {
+          name: 'lighthouse',
+          kind: 'integration',
+          run: ['lhci'],
+          when: 'performance budgets are in scope',
+        },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const ran = [];
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      gates: ['playwright'],
+      isChanged: () => true,
+      runGate: (gate) => {
+        ran.push(gate.name);
+        return runResult(0);
+      },
+    });
+    assert.deepEqual(
+      report.gates.map((g) => [g.name, g.status]),
+      [
+        ['playwright', 'pass'],
+        ['lighthouse', 'not_applicable'],
+      ],
+    );
+    // The unasserted gate is not merely reported unrun — it never executed. A gate that
+    // cannot pass on this machine must not be able to fail the verdict from a claim that
+    // was never about it.
+    assert.deepEqual(ran, ['playwright']);
+    assert.equal(report.verdict, 'pass');
+  });
+
+  it('treats --all as asserting every opt-in gate, and --gate as additive to it', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'playwright', kind: 'e2e', run: ['pw'], when: 'user-visible' },
+        { name: 'lighthouse', kind: 'integration', run: ['lhci'], when: 'perf budgets' },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const all = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      gates: ['playwright'],
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.deepEqual(
+      all.gates.map((g) => g.status),
+      ['pass', 'pass'],
+    );
+  });
+
+  it('ignores an asserted gate name this repo does not declare', () => {
+    // A caller naming a gate that does not exist has asserted nothing, which is the same
+    // nothing as not naming it. It must not throw and must not turn some other gate on.
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'playwright', kind: 'e2e', run: ['pw'], when: 'user-visible' }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      gates: ['cypress'],
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.deepEqual(
+      report.gates.map((g) => g.status),
+      ['not_applicable'],
     );
   });
 
