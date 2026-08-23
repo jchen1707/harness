@@ -99,6 +99,10 @@
           "caveat": {
             "type": "string",
             "description": "One sentence naming how this gate can pass without having checked anything \u2014 a linter rule that fails open on an unclassified file, a metric the runner could not measure, a suite that silently collected nothing. /verify prints it beside the green result. A gate whose vacuous pass is undocumented is worse than a missing gate, because it is trusted."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this gate runs at all. Omit for true. Set false to switch a gate off without deleting its declaration \u2014 the gate stays visible in the report as `disabled`, so a reader can see it exists and is off, which a deleted gate cannot tell them. For a gate that is real but cannot run in this environment, or that checks a property the project does not care about yet."
           }
         }
       }
