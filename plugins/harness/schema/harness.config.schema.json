@@ -100,6 +100,11 @@
             "type": "string",
             "description": "One sentence naming how this gate can pass without having checked anything \u2014 a linter rule that fails open on an unclassified file, a metric the runner could not measure, a suite that silently collected nothing. /verify prints it beside the green result. A gate whose vacuous pass is undocumented is worse than a missing gate, because it is trusted."
           },
+          "requires": {
+            "$ref": "#/$defs/argv",
+            "description": "A cheap command that exits zero only when this gate's environment is actually present -- the browser downloaded, the container runtime up. Run immediately before the gate, and only when the gate was going to run anyway; when it exits non-zero or cannot be spawned, the gate is reported `unavailable` and never runs. This is what makes the difference between \"the tool is missing\" and \"the code is wrong\" visible in the report instead of buried in a failure tail: a missing browser makes the e2e gate exit non-zero exactly like a real regression does, and an agent handed that `fail` will try to fix it by writing code. `caveat` says the same thing in prose for a human; this says it in a form a machine can check. Omit for a gate that needs nothing beyond the repo's own install step.",
+            "examples": [["pnpm", "exec", "playwright", "--version"], ["docker", "info"]]
+          },
           "enabled": {
             "type": "boolean",
             "description": "Whether this gate runs at all. Omit for true. Set false to switch a gate off without deleting its declaration \u2014 the gate stays visible in the report as `disabled`, so a reader can see it exists and is off, which a deleted gate cannot tell them. For a gate that is real but cannot run in this environment, or that checks a property the project does not care about yet."

@@ -57,7 +57,7 @@
  * | --- | --- |
  * | `pass` | exit 0, and the gate actually started |
  * | `fail` | non-zero exit |
- * | `unavailable` | the process could not be spawned (`result.error`) — the case `verify.mjs` must swallow and a report must not |
+ * | `unavailable` | the gate did not run: either the process could not be spawned (`result.error`) — the case `verify.mjs` must swallow and a report must not — or its `requires` probe said the environment is not there, in which case the gate was never attempted and carries no `exit` |
  * | `not_applicable` | `kind` is `e2e`/`integration` and the caller asserted neither `--gate <name>` nor `--all` |
  * | `skipped_unchanged` | the app's `gatedChange()` was false — a monorepo app the turn never touched |
  * | `disabled` | `enabled: false` in config — the gate is declared but switched off |
@@ -85,6 +85,7 @@ import { dispatch, gatedChange, gatedChangeSince, STOP_KINDS } from './verify.mj
 
 const MAX_LINES = 40;
 const GATE_TIMEOUT = 540_000;
+const PROBE_TIMEOUT = 30_000;
 
 /** Schema version of the emitted document. Bumped only on a breaking shape change. */
 export const REPORT_SCHEMA_VERSION = 1;
@@ -135,6 +136,29 @@ export const EXIT = { pass: 0, fail: 1, incomplete: 3 };
 export function classifyRun(run) {
   if (run.error) return 'unavailable';
   return run.status === 0 ? 'pass' : 'fail';
+}
+
+/**
+ * Whether a gate's `requires` probe proved the gate's environment is actually there.
+ *
+ * The judgment here is the mirror of `classifyRun`'s, and it exists because the two failures
+ * are indistinguishable from a gate's exit code alone. `pnpm test:e2e` with no browser
+ * downloaded exits non-zero exactly the way it does for a real regression; so does
+ * `pytest -m integration` with no container runtime. A report that calls both `fail` tells a
+ * reader the code is wrong, and an agent handed that will spend an attempt trying to fix the
+ * code -- repeatedly, because writing code never installs a browser.
+ *
+ * A probe that could not be spawned counts as unmet, not as met. The probe is the cheaper
+ * command of the two; if it cannot start, the gate's own toolchain is not there either, and
+ * guessing "probably fine" is the one answer that puts the expensive wrong result back on the
+ * table.
+ *
+ * @param {GateRun} probe
+ * @returns {boolean}
+ */
+export function requirementMet(probe) {
+  if (probe.error) return false;
+  return probe.status === 0;
 }
 
 /**
@@ -214,6 +238,11 @@ export function exitCode(verdict) {
  * actually run, so a fake never has to answer for a `not_applicable` or `skipped_unchanged`
  * gate.
  *
+ * `probeGate(gate, target)` returns a {@link GateRun} for a gate's `requires` argv. It is
+ * called only for a gate that declares one *and* was already going to run, so asserting no
+ * opt-in gate probes nothing and costs nothing. It defaults to "met" so every existing caller
+ * -- and every config with no `requires` anywhere -- behaves exactly as it did before.
+ *
  * @param {Object} args
  * @param {Object} args.root - The root config, as `loadConfig` returns it.
  * @param {Object[]} args.targets - The dispatched targets, as `dispatch` returns them.
@@ -222,6 +251,7 @@ export function exitCode(verdict) {
  * @param {string[]} [args.gates=[]] - Opt-in gate names the caller asserted individually.
  * @param {(target: Object) => boolean} args.isChanged
  * @param {(gate: Object, target: Object) => GateRun} args.runGate
+ * @param {(gate: Object, target: Object) => GateRun} [args.probeGate]
  * @returns {Object} the JSON document
  */
 export function buildReport({
@@ -232,6 +262,7 @@ export function buildReport({
   gates: asserted = [],
   isChanged,
   runGate,
+  probeGate = () => ({ status: 0, stdout: '', stderr: '', error: null, durationMs: null }),
 }) {
   // Names, not indices: a monorepo dispatches the same gate name across several targets and
   // the caller asserts the gate, not one app's copy of it. An asserted name that no config
@@ -276,6 +307,26 @@ export function buildReport({
       if (!STOP_KINDS.has(gate.kind) && !all && !assertedNames.has(gate.name)) {
         gates.push(gateEntry(gate, 'not_applicable', null));
         continue;
+      }
+      // The environment assertion, after every reason not to run and before the run itself.
+      // After, because probing a gate that `not_applicable` or `skipped_unchanged` already
+      // settled would spend a subprocess to answer a question nobody asked. Before, because
+      // the whole point is that the gate does not run: `unavailable` here means "this was
+      // never attempted", so it carries no `exit` and no `durationMs` -- the gate has no
+      // exit code, and saying it exited would be a lie about which command produced it.
+      // The probe's own output goes in the tail, because that is the only place a reader
+      // can find out which requirement was missing.
+      if (Array.isArray(gate.requires) && gate.requires.length > 0) {
+        const probe = probeGate(gate, target);
+        if (!requirementMet(probe)) {
+          const entry = gateEntry(gate, 'unavailable', null);
+          entry.outputTail =
+            tail((probe.stdout ?? '') + (probe.stderr ?? ''), MAX_LINES) ||
+            probe.error?.message ||
+            `requires: ${gate.requires.join(' ')}`;
+          gates.push(entry);
+          continue;
+        }
       }
       // Run once: `runGate` shells out in production, so calling it twice would run every
       // gate twice. The result is classified and recorded from the same run.
@@ -373,6 +424,11 @@ async function main() {
           )
         : gatedChange(target.root, target.hooks, repoRelative(target.root, root.root)),
     runGate: (gate, target) => timedRun(gate.run, { cwd: target.root, timeout: GATE_TIMEOUT }),
+    // A far shorter timeout than a gate's: a requirement probe that has not answered in
+    // thirty seconds is not a slow probe, it is a hung one, and its whole reason to exist
+    // is being cheaper than the gate it guards.
+    probeGate: (gate, target) =>
+      timedRun(gate.requires, { cwd: target.root, timeout: PROBE_TIMEOUT }),
   });
 
   if (args.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
