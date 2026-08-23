@@ -102,10 +102,10 @@
           },
           "requires": {
             "$ref": "#/$defs/argv",
-            "description": "A cheap command that exits zero only when this gate's environment is actually present -- the browser downloaded, the container runtime up. Run immediately before the gate, and only when the gate was going to run anyway; when it exits non-zero or cannot be spawned, the gate is reported `unavailable` and never runs. This is what makes the difference between \"the tool is missing\" and \"the code is wrong\" visible in the report instead of buried in a failure tail: a missing browser makes the e2e gate exit non-zero exactly like a real regression does, and an agent handed that `fail` will try to fix it by writing code. `caveat` says the same thing in prose for a human; this says it in a form a machine can check. Omit for a gate that needs nothing beyond the repo's own install step.",
+            "description": "A cheap command that exits zero only when this gate's environment is actually present -- the browser downloaded, the container runtime up. Run immediately before the gate, and only when the gate was going to run anyway; when it exits non-zero or cannot be spawned, the gate is reported `unavailable` and never runs. This is what makes the difference between \"the tool is missing\" and \"the code is wrong\" visible in the report instead of buried in a failure tail: a missing browser makes the e2e gate exit non-zero exactly like a real regression does, and an agent handed that `fail` will try to fix it by writing code. `caveat` says the same thing in prose for a human; this says it in a form a machine can check. Omit for a gate that needs nothing beyond the repo's own install step. Probe the thing that is actually absent, not the wrapper around it -- measured 2026-08-23, `pnpm exec playwright --version` exits 0 with no browsers downloaded at all, so as a probe it reports \"environment met\" in exactly the case it was written to catch. A probe that cannot fail for the reason named in `caveat` is worse than no probe, because the gate is then trusted.",
             "examples": [
-              ["pnpm", "exec", "playwright", "--version"],
-              ["docker", "info"]
+              ["pnpm", "exec", "playwright", "screenshot", "about:blank", "/tmp/probe.png"],
+              ["uv", "run", "python", "scripts/integration_env_probe.py"]
             ]
           },
           "enabled": {
