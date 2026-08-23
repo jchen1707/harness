@@ -71,8 +71,11 @@ exist.
 
 `gate_report.mjs --json` (the `hooks/` hook this skill's gates come from) emits the same
 results as one JSON document: one row per gate with its `status` (`pass`, `fail`,
-`unavailable`, `not_applicable` or `skipped_unchanged`), its `exit`, `durationMs`, `caveat`
-and `when`, and a single `verdict`. Use it when a caller needs the record rather than prose —
+`unavailable`, `not_applicable`, `skipped_unchanged` or `disabled`), its `exit`,
+`durationMs`, `caveat` and `when`, and a single `verdict`. A gate that declares a `requires`
+argv is probed with it first and reported `unavailable` without running when the probe does
+not exit zero — so "the browser was never installed" arrives as a gate that could not run
+rather than as a gate that failed, which is a different instruction to whoever reads it. Use it when a caller needs the record rather than prose —
 an automated verifier, a CI summary, a run record — and use this skill when a human is
 reading. Its `verdict` is `incomplete`, never `pass`, when a gate could not start or a
 monorepo app had no config of its own, because a green exit code alone does not prove every
