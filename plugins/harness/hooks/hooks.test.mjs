@@ -65,6 +65,7 @@ import {
   REPORT_SCHEMA_VERSION,
   buildReport,
   classifyRun,
+  requirementMet,
   computeVerdict,
   exitCode,
   parseArgs,
@@ -1329,6 +1330,219 @@ describe('gate report — classification', () => {
     assert.equal(classifyRun({ status: 0, error: null }), 'pass');
     assert.equal(classifyRun({ status: 2, error: null }), 'fail');
     assert.equal(classifyRun({ status: null, error: new Error('x') }), 'unavailable');
+  });
+
+  it('reports a gate whose `requires` probe fails as unavailable, and never runs the gate', () => {
+    // The defect this closes: a missing browser makes `pnpm test:e2e` exit non-zero exactly
+    // the way a real regression does. Reported as `fail`, an agent spends an attempt trying
+    // to fix code that is not broken, and writing code never installs a browser.
+    let ran = false;
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        {
+          name: 'playwright',
+          kind: 'e2e',
+          run: ['pnpm', 'test:e2e'],
+          requires: ['pnpm', 'exec', 'playwright', '--version'],
+          caveat: 'needs browsers installed',
+        },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      isChanged: () => true,
+      runGate: () => {
+        ran = true;
+        return runResult(1, { stdout: 'Executable does not exist\n' });
+      },
+      probeGate: () => runResult(1, { stderr: 'Please run: playwright install\n' }),
+    });
+    assert.equal(ran, false, 'the gate must not run once its requirement is unmet');
+    assert.equal(report.gates[0].status, 'unavailable');
+    assert.equal(report.gates[0].exit, null); // The gate never ran, so it has no exit code.
+    assert.equal(report.gates[0].durationMs, null);
+    assert.match(report.gates[0].outputTail, /playwright install/);
+    assert.equal(report.gates[0].caveat, 'needs browsers installed');
+    // And the verdict follows `unavailable`, so a green exit code cannot stand in for it.
+    assert.equal(report.verdict, 'incomplete');
+    assert.equal(exitCode(report.verdict), 3);
+  });
+
+  it('runs the gate normally when its `requires` probe passes', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        {
+          name: 'playwright',
+          kind: 'e2e',
+          run: ['pnpm', 'test:e2e'],
+          requires: ['pnpm', 'exec', 'playwright', '--version'],
+        },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+      probeGate: () => runResult(0, { stdout: '1.55.0\n' }),
+    });
+    assert.equal(report.gates[0].status, 'pass');
+    assert.equal(report.verdict, 'pass');
+  });
+
+  it('keeps a real failure a `fail` when the requirement is met', () => {
+    // The other half of the same judgment. If a met requirement did not leave `fail` alone,
+    // this mechanism would hide the failures it exists to distinguish itself from.
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'playwright', kind: 'e2e', run: ['pnpm', 'test:e2e'], requires: ['pw', '-v'] },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      isChanged: () => true,
+      runGate: () => runResult(1, { stdout: '1 test failed\n' }),
+      probeGate: () => runResult(0),
+    });
+    assert.equal(report.gates[0].status, 'fail');
+    assert.equal(report.gates[0].exit, 1);
+    assert.equal(report.verdict, 'fail');
+  });
+
+  it('does not probe a gate that was never going to run', () => {
+    // A `requires` probe is a subprocess. Spending one to answer a question that
+    // `not_applicable` already settled is pure cost, and on the opt-in kinds -- the only
+    // ones that carry `requires` in practice -- that is the common case, not the rare one.
+    let probes = 0;
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [
+        { name: 'playwright', kind: 'e2e', run: ['pw'], requires: ['pw', '-v'] },
+        {
+          name: 'off',
+          kind: 'integration',
+          run: ['pg'],
+          requires: ['docker', 'info'],
+          enabled: false,
+        },
+      ],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.ts'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true, // changed, but nothing asserted the opt-in gates
+      runGate: () => runResult(0),
+      probeGate: () => {
+        probes += 1;
+        return runResult(0);
+      },
+    });
+    assert.equal(probes, 0);
+    assert.equal(report.gates[0].status, 'not_applicable');
+    assert.equal(report.gates[1].status, 'disabled');
+  });
+
+  it('leaves a gate with no `requires` exactly as it was', () => {
+    // Every config predating this field declares gates that simply run. The default
+    // injection is what keeps that true for callers that pass no `probeGate` at all.
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'ruff', kind: 'lint', run: ['ruff', 'check'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+    });
+    assert.equal(report.gates[0].status, 'pass');
+  });
+
+  it('treats a `requires` probe that could not be spawned as unmet, not as met', () => {
+    // The probe is the cheaper of the two commands. If it cannot start, the gate's own
+    // toolchain is not there either; guessing "probably fine" puts the expensive wrong
+    // answer -- a `fail` that is really a missing tool -- straight back on the table.
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'pg', kind: 'integration', run: ['pytest'], requires: ['docker', 'info'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+      probeGate: () => runResult(null, { error: new Error('spawnSync docker ENOENT') }),
+    });
+    assert.equal(report.gates[0].status, 'unavailable');
+    assert.match(report.gates[0].outputTail, /ENOENT/);
+  });
+
+  it('names the requirement in the tail when the probe said nothing at all', () => {
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'pg', kind: 'integration', run: ['pytest'], requires: ['docker', 'info'] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      all: true,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+      probeGate: () => runResult(1), // non-zero, no stdout, no stderr, no error
+    });
+    assert.equal(report.gates[0].status, 'unavailable');
+    assert.equal(report.gates[0].outputTail, 'requires: docker info');
+  });
+
+  it('ignores an empty `requires`, which asserts nothing', () => {
+    let probes = 0;
+    const { root, targets, missing } = dispatched({
+      name: 'solo',
+      gates: [{ name: 'g', kind: 'lint', run: ['true'], requires: [] }],
+      hooks: { gatedPaths: ['src'], gatedExtensions: ['.py'] },
+    });
+    const report = buildReport({
+      root,
+      targets,
+      missing,
+      isChanged: () => true,
+      runGate: () => runResult(0),
+      probeGate: () => {
+        probes += 1;
+        return runResult(1);
+      },
+    });
+    assert.equal(probes, 0);
+    assert.equal(report.gates[0].status, 'pass');
+  });
+
+  it('decides a requirement from a probe result directly', () => {
+    assert.equal(requirementMet({ status: 0, error: null }), true);
+    assert.equal(requirementMet({ status: 1, error: null }), false);
+    assert.equal(requirementMet({ status: null, error: new Error('x') }), false);
   });
 
   it('marks e2e and integration not_applicable without --all, and runs them with it', () => {
