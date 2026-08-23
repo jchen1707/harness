@@ -60,6 +60,7 @@
  * | `unavailable` | the process could not be spawned (`result.error`) — the case `verify.mjs` must swallow and a report must not |
  * | `not_applicable` | `kind` is `e2e`/`integration` and the caller asserted neither `--gate <name>` nor `--all` |
  * | `skipped_unchanged` | the app's `gatedChange()` was false — a monorepo app the turn never touched |
+ * | `disabled` | `enabled: false` in config — the gate is declared but switched off |
  *
  * ## The verdict
  *
@@ -246,6 +247,20 @@ export function buildReport({
     // not a gate to attempt. Reporting it would mean executing `undefined`.
     const declared = target.gates.filter((gate) => gate && Array.isArray(gate.run));
     for (const gate of declared) {
+      // Switched off in config, and that outranks every other reason a gate might or
+      // might not run: an operator who set `enabled: false` gets the same answer whether
+      // or not the turn touched the app, and whether or not the caller asserted it.
+      //
+      // Reported rather than omitted. A deleted gate is invisible; a `disabled` row tells
+      // the reader the gate exists and is off, which is the difference between a suite
+      // that does not check something and a suite that never claimed to. It is not a
+      // `pass` — nothing ran — but it is not `incomplete` either, because nothing failed
+      // to start that was meant to start. `computeVerdict` special-cases only `fail` and
+      // `unavailable`, so this falls through to `pass` on its own.
+      if (gate.enabled === false) {
+        gates.push(gateEntry(gate, 'disabled', null));
+        continue;
+      }
       if (!changed) {
         gates.push(gateEntry(gate, 'skipped_unchanged', null));
         continue;
