@@ -103,7 +103,10 @@
           "requires": {
             "$ref": "#/$defs/argv",
             "description": "A cheap command that exits zero only when this gate's environment is actually present -- the browser downloaded, the container runtime up. Run immediately before the gate, and only when the gate was going to run anyway; when it exits non-zero or cannot be spawned, the gate is reported `unavailable` and never runs. This is what makes the difference between \"the tool is missing\" and \"the code is wrong\" visible in the report instead of buried in a failure tail: a missing browser makes the e2e gate exit non-zero exactly like a real regression does, and an agent handed that `fail` will try to fix it by writing code. `caveat` says the same thing in prose for a human; this says it in a form a machine can check. Omit for a gate that needs nothing beyond the repo's own install step.",
-            "examples": [["pnpm", "exec", "playwright", "--version"], ["docker", "info"]]
+            "examples": [
+              ["pnpm", "exec", "playwright", "--version"],
+              ["docker", "info"]
+            ]
           },
           "enabled": {
             "type": "boolean",
