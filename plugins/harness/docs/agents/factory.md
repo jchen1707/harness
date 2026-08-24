@@ -5,12 +5,12 @@ A repository can be a perfectly good harness repo — gates dispatch, the Stop g
 between that and a repo the control plane drives from a Linear ticket to a merged pull
 request with no human at the keyboard.
 
-This is shared harness doctrine. It describes what a repo *declares* to be eligible; the
+This is shared harness doctrine. It describes what a repo _declares_ to be eligible; the
 resolution itself runs in the factory (layer D), against its project registry. Nothing here
 is a gate command or a review prompt — the factory holds none of those — and nothing here is
 the factory's own code. It is the layer-A half of the same boundary `config.md` draws: that
 file is what layer A asks of a repository, this one is what layer A asks of a repository that
-wants to be *driven*.
+wants to be _driven_.
 
 ## The rule
 
@@ -67,7 +67,7 @@ factory never re-states that; it reads the gate report layer A produces. See `co
 A product repo with no Linear team prefix cannot be driven by the factory today. The
 registry resolves by prefix, and a product repo on a team that already has a harness repo
 would collide: two projects, one team, `RegistryError`. The alternative — resolve a project
-by a label or a Linear project *within* a team, so a ticket on an existing team resolves to
+by a label or a Linear project _within_ a team, so a ticket on an existing team resolves to
 the product repo instead of the harness — is **not built**. It is a known gap, named here so
 a repo that needs it is not told to configure a row that would make the daemon refuse to
 start.
