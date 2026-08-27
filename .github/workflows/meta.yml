@@ -53,8 +53,20 @@ jobs:
 
       # No setup step, by design — the checks are stdlib-only Python, like everything
       # else in this repo.
+      # `--current` on a push, not on a pull request. It asks whether each pinned stack still
+      # vendors the layer A this ref carries, and between a layer A merge here and the stacks
+      # vendoring it that is legitimately false -- so on a PR the answer would be "yes,
+      # obviously, that is what this PR is about", and a check that is expected to fail is a
+      # check people learn to ignore. On a push to v2 it is the thing you want to hear: the
+      # mounting is stale, go finish the loop. It clears when the pin bump lands.
+      #
+      # Without it, `--pins` asks only whether a pin is *on* its branch, never whether it is
+      # current -- which is how the mounting drifted eight vendor syncs deep with every check
+      # green.
       - name: The submodules match this ref
-        run: python3 scripts/check_submodules.py --pins
+        run: |
+          python3 scripts/check_submodules.py --pins \
+            ${{ github.event_name == 'push' && '--current' || '' }}
 
   # The job phase 3 deferred, and phase 4 earns. Until now layer A was prose, and prose
   # cannot break a build; it now carries a workflow, a config schema and the review frames
