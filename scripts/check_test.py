@@ -273,6 +273,41 @@ class CrossStackVerdict(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("no gate ran", problems[0])
 
+    def test_a_manifest_only_change_is_not_layer_a_moving(self) -> None:
+        """The regression this guard actually shipped with.
+
+        `MANIFEST.json` records the harness sha the tree was taken at, so a sync rewrites it
+        on every commit here whether or not a byte of layer A changed. Counting it made
+        `layer_a_moved` answer "yes" while `gate_report.mjs` -- asking about `gatedPaths`
+        filtered to `gatedExtensions`, where the manifest is neither -- kept correctly
+        answering "no", and the disagreement surfaced as a hard failure on every harness PR
+        that did not touch layer A. Hidden until the stacks' pins were current, because
+        until then layer A really had moved every time.
+        """
+        captured = []
+
+        def fake(args, cwd):
+            captured.append(args)
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        self.assertFalse(self.cross_stack.layer_a_moved(Path("stack"), fake))
+        pathspec = captured[0]
+        self.assertIn(":(exclude).agents/vendor/harness/MANIFEST.json", pathspec)
+
+    def test_real_vendored_content_still_counts_as_moved(self) -> None:
+        def fake(args, cwd):
+            return subprocess.CompletedProcess(
+                args, 0, stdout=" M .agents/vendor/harness/hooks/lib.mjs\n", stderr=""
+            )
+
+        self.assertTrue(self.cross_stack.layer_a_moved(Path("stack"), fake))
+
+    def test_it_proves_rather_than_skips_when_git_cannot_say(self) -> None:
+        def fake(args, cwd):
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="boom")
+
+        self.assertTrue(self.cross_stack.layer_a_moved(Path("stack"), fake))
+
     def test_a_run_counts_only_gates_that_executed(self) -> None:
         report = self.report(
             "pass",
