@@ -213,7 +213,7 @@ def check_pins(root: Path, branches: dict[str, str]) -> list[str]:
     return problems
 
 
-def check_currency(root: Path, branches: dict[str, str]) -> list[str]:
+def check_currency(root: Path, branches: dict[str, str], exec_=None) -> list[str]:
     """Does each pinned stack still vendor the layer A this ref carries?
 
     Delegates to `vendor_sync.py check`, which is the freshness check each consumer's own CI
@@ -226,26 +226,52 @@ def check_currency(root: Path, branches: dict[str, str]) -> list[str]:
     skips this when it did not.
     """
     vendor_sync = root / "scripts" / "vendor_sync.py"
-    if not vendor_sync.exists():
+    if exec_ is None and not vendor_sync.exists():
         return []
+
+    def default(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, check=False, cwd=root
+        )
+
+    exec_ = exec_ or default
 
     problems: list[str] = []
     for path in sorted(branches):
-        if not (root / path / ".git").exists():
+        if exec_ is default and not (root / path / ".git").exists():
             continue  # Not checked out; `inspect()` has already said so.
-        result = subprocess.run(  # noqa: S603
+        result = exec_(
             [sys.executable, str(vendor_sync), "check", "--target", str(root / path),
-             "--harness", str(root)],
-            capture_output=True, text=True, check=False, cwd=root,
+             "--harness", str(root)]
         )
         if result.returncode == 0:
             continue
-        detail = next(
-            (line.strip() for line in result.stdout.splitlines() if "stale pin" in line),
-            result.stdout.strip().splitlines()[0] if result.stdout.strip() else "",
+
+        # "Stale" and "could not tell" are different answers, and reporting the second as
+        # the first is worse than not checking at all. `vendor_sync.py` prints its verdict
+        # on stdout and dies on stderr -- a `SystemExit` from a git command it could not
+        # run -- so an empty stdout means the check never reached a verdict. The shape that
+        # produced this: a shallow CI checkout, where the sha the stack vendors is simply
+        # not in the clone, so `git rev-list <pinned>..HEAD` fails. It read as a confident
+        # "your pins are stale" with no detail attached, against pins that were current.
+        #
+        # Named rather than swallowed, and it still fails: the same rule the gate report
+        # applies to a gate that could not start. A check that did not run must never be
+        # rounded to either green or a specific red.
+        verdict = next(
+            (line.strip() for line in result.stdout.splitlines() if "stale pin" in line), ""
         )
+        if not verdict:
+            reason = (result.stderr.strip() or result.stdout.strip() or "no output").splitlines()
+            problems.append(
+                f"{path}: could not determine whether the pin is current -- "
+                f"`vendor_sync.py check` did not reach a verdict: {reason[0]} "
+                f"(a shallow checkout does this; the job needs fetch-depth: 0)"
+            )
+            continue
+
         problems.append(
-            f"{path} pins a commit whose layer A is behind this ref. {detail} "
+            f"{path} pins a commit whose layer A is behind this ref. {verdict} "
             f"Sync and merge in {path}, then bump the pin here."
         )
     return problems

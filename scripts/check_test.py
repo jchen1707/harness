@@ -321,5 +321,64 @@ class CrossStackVerdict(unittest.TestCase):
         self.assertEqual(self.cross_stack._print_gates(report), 1)
 
 
+class MountingCurrency(unittest.TestCase):
+    """`check_submodules.py --current`: is the mounting still reading the right layer A?
+
+    `--pins` only ever asked whether a pin is *on* the branch `.gitmodules` names, which is
+    how the mounting drifted eight vendor syncs deep with every check green.
+
+    The case that matters most here is the third one. A delegate that could not reach a
+    verdict is not a delegate that returned "stale", and reporting the second as the first
+    produces a confident red naming the wrong cause -- which is how a job teaches people to
+    ignore it. Same rule the gate report applies to a gate that could not start.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_submodules
+
+        cls.mod = check_submodules
+
+    def currency(self, returncode: int, stdout: str = "", stderr: str = "") -> list[str]:
+        def fake(argv):
+            return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr=stderr)
+
+        return self.mod.check_currency(ROOT, {"python-harness": "v2"}, exec_=fake)
+
+    def test_a_current_pin_is_no_problem(self) -> None:
+        self.assertEqual(self.currency(0, "OK: vendored layer A matches harness@55958b30e"), [])
+
+    def test_a_pin_whose_layer_a_moved_is_reported_as_stale(self) -> None:
+        problems = self.currency(
+            1,
+            "FAIL: vendored layer A is out of date with harness\n"
+            "  - stale pin: layer A moved in harness@v2 (b8c0b34a9 -> 55958b30e).\n",
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("behind this ref", problems[0])
+        self.assertIn("stale pin", problems[0])
+
+    def test_a_delegate_that_never_reached_a_verdict_says_so(self) -> None:
+        """The regression: a shallow checkout, reported as stale pins.
+
+        `vendor_sync.py` raises `SystemExit` from a git command it cannot run, which writes
+        to stderr and leaves stdout empty. Reading only stdout turned "I could not tell"
+        into "your pins are stale", with no detail attached, against pins that were current.
+        """
+        problems = self.currency(
+            1, stdout="", stderr="git rev-list --count 55958b3..HEAD failed: unknown revision"
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("could not determine", problems[0])
+        self.assertNotIn("behind this ref", problems[0])
+        self.assertIn("unknown revision", problems[0])
+        self.assertIn("fetch-depth", problems[0])
+
+    def test_it_still_fails_rather_than_passing_when_it_cannot_tell(self) -> None:
+        # Named, not swallowed. A check that did not run must not round to green either.
+        self.assertTrue(self.currency(1, stdout="", stderr="boom"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
