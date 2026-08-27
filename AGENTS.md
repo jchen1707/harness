@@ -122,6 +122,10 @@ scripts/vendor_sync.py            ← the second adapter: sync + freshness check
 scripts/new_project.py            ← applies a template; /new-project drives it
 scripts/check_submodules.py       ← the submodules match the branch you are on
 scripts/cross_stack.py            ← this layer A against each stack's own gates
+scripts/config_contract.py        ← validates a config against the published schema
+scripts/check_test.py             ← this repo's own suite; check.py runs it
+CONTEXT.md                        ← what the nouns mean
+docs/adr/                         ← decisions a future review should not re-litigate
 python-harness/                   ← submodule, for reading
 frontend-harness/                 ← submodule, for reading
 ```
@@ -175,6 +179,13 @@ for why that file has the shape it does.
    bump deliberately.
 3. Re-run `vendor_sync.py sync` in each consumer that vendors, and commit the bumped pin.
    Their CI will tell you if you forget.
+
+Structural rules about `harness.config.json` go in the schema, never in `check.py`: the
+schema is what every consumer's editor reads, and `config_contract.py` validates against it
+so the gate and the contract cannot disagree. Rules the schema cannot express -- "a stack
+with no test gate means `/test` runs nothing" -- stay hand-written, and that split is the
+whole of it. Which gates _run_ is not a rule anybody restates at all; see
+`docs/adr/0002-gate-report-is-the-only-gate-runner.md`.
 
 The `$comment` at the top of a generated file is not decoration. A file carrying it is
 overwritten without warning by the next sync.
