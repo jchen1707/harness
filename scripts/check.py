@@ -22,6 +22,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import config_contract
+
 # When gating a *generated* tree, this script is invoked from the source checkout while
 # the working directory is the built tree. Prefer the working directory when it looks like
 # a harness root, so the manifests that get checked are the built ones.
@@ -496,7 +498,21 @@ SHARED_AXES = (
     "perf-reviewer",
     "cost-reviewer",
 )
-GATE_KINDS = {"lint", "format", "types", "build", "test", "e2e", "integration"}
+# The contract for `harness.config.json`, loaded once. Everything structural about a config
+# -- required keys, the gate-kind enum, the shape of a `protected` entry or a `formatter` --
+# is asserted from this rather than restated here. The rules that remain hand-written below
+# are the ones no schema can express, because they are about what layer A *does* with a
+# config: "no test gate means /test would run nothing" is not a shape.
+CONFIG_SCHEMA = config_contract.load_schema(ROOT)
+GATE_KINDS = set(config_contract.gate_kinds(CONFIG_SCHEMA))
+
+
+def config_violations(label: str, config: dict) -> bool:
+    """Report every way `config` breaks the published schema. True when it conformed."""
+    problems = config_contract.violations(config, CONFIG_SCHEMA)
+    for problem in problems:
+        fail(f"{label}: {problem}")
+    return not problems
 
 
 def check_layer_a_composition() -> None:
@@ -628,18 +644,15 @@ def check_stack_configs() -> None:
             fail(f"{name}/harness.config.json does not parse: {exc}")
             continue
 
-        for key in ("name", "gates"):
-            if key not in config:
-                fail(f"{name}: harness.config.json has no {key!r}")
+        # Structure first, from the schema. A config that does not conform is not worth
+        # asking the semantic questions of -- they would report the same defect again in
+        # vaguer words.
+        if not config_violations(f"{name}/harness.config.json", config):
+            continue
+
         gates = config.get("gates") or []
         if not gates:
             fail(f"{name}: declares no gates -- /lint, /test and /verify have nothing to run")
-        for gate in gates:
-            kind = gate.get("kind")
-            if kind not in GATE_KINDS:
-                fail(f"{name}: gate {gate.get('name')!r} has kind {kind!r}")
-            if not isinstance(gate.get("run"), list) or not gate.get("run"):
-                fail(f"{name}: gate {gate.get('name')!r} has no argv in `run`")
         if not any(g.get("kind") in {"lint", "format", "types"} for g in gates):
             fail(f"{name}: no lint, format or types gate -- /lint would run nothing")
         if not any(g.get("kind") == "test" for g in gates):
@@ -679,18 +692,14 @@ def check_stack_configs() -> None:
         if hooks is None:
             print(f"  skip {name} declares no hooks block yet")
         else:
+            # The shapes of `protected`, `formatters` and the rest are the schema's to
+            # enforce, and it already has above. What it cannot say is that an *empty* but
+            # perfectly well-formed pathspec means the Stop gate never fires -- green, and
+            # measuring nothing. That is the failure this whole repository exists to make
+            # loud, so it is checked here.
             for key in ("gatedPaths", "gatedExtensions"):
                 if not hooks.get(key):
                     fail(f"{name}: hooks.{key} is empty -- the Stop gate would never fire")
-            for entry in hooks.get("protected", []):
-                if not entry.get("glob") or not entry.get("why"):
-                    fail(f"{name}: a protected entry has no glob or no reason: {entry}")
-                if entry.get("scope") not in (None, "write", "secret"):
-                    fail(f"{name}: protected {entry['glob']!r} has scope {entry.get('scope')!r}")
-            for entry in hooks.get("formatters", []):
-                for argv in entry.get("run", []):
-                    if not isinstance(argv, list) or not argv:
-                        fail(f"{name}: a formatter for {entry.get('match')} has no argv")
             ok(f"{name}: hooks contract declared")
 
         if not gates:
@@ -745,19 +754,13 @@ def check_templates() -> None:
             fail(f"the root config names {app} but templates/{template} has no config of its own")
             continue
 
+        config_violations(f"templates/{template}/harness.config.json", config)
+
         gates = config.get("gates") or []
         if not gates:
             fail(f"templates/{template}: declares no gates -- /lint and /test would run nothing")
-        for gate in gates:
-            if gate.get("kind") not in GATE_KINDS:
-                fail(f"templates/{template}: gate {gate.get('name')!r} has kind {gate.get('kind')!r}")
-            if not isinstance(gate.get("run"), list) or not gate.get("run"):
-                fail(f"templates/{template}: gate {gate.get('name')!r} has no argv in `run`")
 
         hooks = config.get("hooks") or {}
-        for entry in hooks.get("protected", []):
-            if not entry.get("glob") or not entry.get("why"):
-                fail(f"templates/{template}: a protected entry has no glob or no reason: {entry}")
 
         # The two cross-app declarations that make the dispatch work. Each app names the
         # shared contract and the root config in its own pathspec, and nothing else says so:

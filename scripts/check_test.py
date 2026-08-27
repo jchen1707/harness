@@ -151,6 +151,80 @@ class VendorRoundTrip(unittest.TestCase):
         )
 
 
+class ConfigContract(unittest.TestCase):
+    """The schema validator that replaced `check.py`'s hand-written config assertions.
+
+    These are the cases the hand-written copies used to cover, plus the one they could not:
+    that the validator refuses to run at all against a schema keyword it does not implement,
+    rather than skipping it and under-enforcing in silence.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import config_contract
+
+        cls.contract = config_contract
+        cls.schema = config_contract.load_schema(ROOT)
+
+    def test_the_shipped_configs_conform(self) -> None:
+        """Both stacks and every template, against the contract they are handed."""
+        paths = [ROOT / s / "harness.config.json" for s in ("python-harness", "frontend-harness")]
+        paths += sorted((ROOT / "templates").rglob("harness.config.json"))
+        checked = 0
+        for path in paths:
+            if not path.exists():
+                continue  # A submodule that is not checked out.
+            checked += 1
+            with self.subTest(config=str(path.relative_to(ROOT))):
+                document = json.loads(path.read_text())
+                self.assertEqual(self.contract.violations(document, self.schema), [])
+        self.assertTrue(checked, "no config was checked -- the assertion would be vacuous")
+
+    def test_gate_kinds_come_from_the_schema(self) -> None:
+        # The value most likely to be extended, and the copy that would have gone stale
+        # silently: `e2e` and `integration` were both added after the first four.
+        kinds = self.contract.gate_kinds(self.schema)
+        self.assertIn("lint", kinds)
+        self.assertIn("integration", kinds)
+
+    def test_an_undeclared_gate_kind_is_a_violation(self) -> None:
+        bad = {"name": "x", "gates": [{"name": "g", "kind": "typo", "run": ["true"]}]}
+        problems = self.contract.violations(bad, self.schema)
+        self.assertTrue(any("typo" in p for p in problems), problems)
+
+    def test_a_config_that_is_neither_router_nor_gated_is_a_violation(self) -> None:
+        """The one conditional in the contract: name `apps`, or declare `gates`."""
+        self.assertTrue(self.contract.violations({"name": "x"}, self.schema))
+        self.assertEqual(self.contract.violations({"name": "x", "apps": ["a"]}, self.schema), [])
+
+    def test_an_unknown_key_is_a_violation(self) -> None:
+        bad = {"name": "x", "gates": [{"name": "g", "kind": "lint", "run": ["true"]}], "nope": 1}
+        problems = self.contract.violations(bad, self.schema)
+        self.assertTrue(any("nope" in p for p in problems), problems)
+
+    def test_a_protected_entry_needs_a_reason(self) -> None:
+        # `why` is required by the schema because a guard nobody can explain is a guard
+        # somebody will delete.
+        bad = {
+            "name": "x",
+            "gates": [{"name": "g", "kind": "lint", "run": ["true"]}],
+            "hooks": {"protected": [{"glob": "*.lock"}]},
+        }
+        problems = self.contract.violations(bad, self.schema)
+        self.assertTrue(any("why" in p for p in problems), problems)
+
+    def test_it_refuses_a_schema_keyword_it_cannot_honour(self) -> None:
+        """The safety rule the hand-written copies could not have.
+
+        A validator that skips what it does not understand under-enforces exactly as a stale
+        hand-written copy does, and just as invisibly. This one breaks the build in the
+        repository that owns the schema, which is the cheapest place to find out.
+        """
+        with self.assertRaises(self.contract.SchemaUnsupported):
+            self.contract.violations({"a": 1}, {"type": "object", "patternProperties": {}})
+
+
 class CrossStackVerdict(unittest.TestCase):
     """`cross_stack.py` reads the report's verdict; it does not form one of its own.
 
