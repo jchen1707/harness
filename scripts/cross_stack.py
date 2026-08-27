@@ -54,6 +54,9 @@ VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
 # just wrote, one function call up.
 VENDOR_DIR = Path(".agents/vendor/harness")
 GATE_REPORT = VENDOR_DIR / "hooks" / "gate_report.mjs"
+# Records the harness sha the tree was taken at, so it moves on every commit here even when
+# layer A's content did not. See `layer_a_moved`.
+MANIFEST_NAME = "MANIFEST.json"
 
 # Statuses that mean a gate actually executed. Everything else is a documented dispatch
 # decision -- switched off, not asked for, or belonging to an app the change never touched.
@@ -72,16 +75,36 @@ def _capture(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def layer_a_moved(stack: Path) -> bool:
-    """Did the sync actually change this stack's vendored layer A?
+def layer_a_moved(stack: Path, exec_=_capture) -> bool:
+    """Did the sync actually change this stack's vendored layer A *content*?
 
     Asked before the toolchain is installed, so an unchanged layer A costs neither an
     install nor a gate run. This is not a gate-selection decision and must not become one:
     it asks only whether *this script's own write* moved anything. Whether that constitutes
     a change the gates care about is `gate_report.mjs`'s judgment, made against the stack's
     own `gatedPaths`, and it is made again independently below.
+
+    **`MANIFEST.json` is excluded, and that exclusion is the whole correctness of this
+    function.** The manifest records the harness sha the tree was taken at, so it changes on
+    every commit here whether or not a single byte of layer A did. Counting it as movement
+    made this function answer "yes" while `gate_report.mjs` -- which looks at the stack's
+    `gatedPaths` (`.agents/vendor/harness/hooks`) filtered to its `gatedExtensions` -- kept
+    correctly answering "no". Two questions that have to agree, asked in different terms,
+    and the disagreement landed in the vacuous-green guard below as a hard failure on every
+    harness PR that did not touch layer A. It stayed hidden only while the stacks' pins were
+    stale enough that layer A really had moved every time.
     """
-    result = _capture(["git", "status", "--porcelain", "--", str(VENDOR_DIR)], stack)
+    result = exec_(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--",
+            str(VENDOR_DIR),
+            f":(exclude){VENDOR_DIR / MANIFEST_NAME}",
+        ],
+        stack,
+    )
     if result.returncode != 0:
         return True  # Can't tell -> prove it rather than skip it.
     return bool(result.stdout.strip())

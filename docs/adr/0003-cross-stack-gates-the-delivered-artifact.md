@@ -47,6 +47,15 @@ sha's own CI already proved it, and re-running both suites would measure the sam
 The vacuous-green guard is retargeted rather than dropped: it fails when layer A _did_ move
 and still no gate ran, which can only mean a defect in the stack's own declaration.
 
+That guard compares two answers to "did layer A move?", and they must be asked in the same
+terms or the guard fires on the difference. `MANIFEST.json` is the trap: it records the
+harness sha the tree was taken at, so a sync rewrites it on every commit here whether or not
+a byte of layer A changed. `cross_stack.py` excludes it; `gate_report.mjs` never saw it,
+because it is outside the stacks' `gatedPaths` and is not a gated extension. Shipping without
+that exclusion failed the job on every harness PR that did not touch layer A, and it was
+invisible until the stacks' pins were current -- until then layer A genuinely had moved every
+time.
+
 **`incomplete` is kept apart from `fail`.** A gate that could not start does not mean layer A
 broke the stack; it means the job did not find out. Reporting it as a failure would be a red
 tick for the wrong reason, which teaches people to ignore the one job that says whether layer
