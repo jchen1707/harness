@@ -36,6 +36,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # `--current` compares the sha each stack vendors against this ref, which means
+          # `git rev-list <that sha>..HEAD` has to be answerable. The default depth-1
+          # checkout does not contain that sha at all, so the freshness check dies on an
+          # unknown revision rather than returning a verdict.
+          fetch-depth: 0
 
       # `--pins` asks whether each pinned commit is still on the branch `.gitmodules`
       # names, which needs that branch present inside the submodule. The checkout above
