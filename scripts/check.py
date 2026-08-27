@@ -114,85 +114,42 @@ def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False)  # noqa: S603
 
 
-def check_vendor_round_trip() -> None:
-    print("vendor round-trip")
-    with tempfile.TemporaryDirectory() as tmp:
-        target = Path(tmp) / "consumer"
-        target.mkdir()
+def check_own_tests() -> None:
+    """This repository's own Python suite: the vendor round-trip and the config contract.
 
-        # Against a clone at HEAD, not this working tree. Two reasons: a consumer only ever
-        # receives committed content, so that is what the round-trip should exercise; and
-        # `sync` now refuses a dirty checkout, which would otherwise make this gate
-        # unrunnable for the one person most likely to want it -- somebody midway through
-        # editing layer A.
-        source = Path(tmp) / "harness"
-        cloned = run(["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(source)], cwd=ROOT)
-        if cloned.returncode != 0:
-            fail(f"could not clone the harness for the round-trip: {cloned.stderr.strip()}")
-            return
+    These cases used to live inline here, as a sequence of `run(...)`-then-`fail(...)`
+    blocks. They were already tests -- each tampers with a synced consumer and asserts the
+    freshness guard notices -- but written as a check, so no case could be run on its own,
+    a failure named the file rather than the case, and the expensive fixture could not be
+    reused. `scripts/check_test.py` is where they live now.
 
-        synced = run(
-            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source), "--target", str(target)],
-            cwd=ROOT,
-        )
-        if synced.returncode != 0:
-            fail(f"sync failed: {synced.stderr.strip() or synced.stdout.strip()}")
-            return
-        ok("sync writes a vendored tree")
+    Delegated exactly the way `check_shared_hooks` delegates to `node --test`, and for the
+    same reason: the gate stays one command, and the suite stays runnable by hand.
+    """
+    print("own tests")
+    suite = ROOT / "scripts" / "check_test.py"
+    if not suite.exists():
+        fail("scripts/check_test.py is missing -- the round-trip gate has no suite")
+        return
 
-        vendored = target / ".agents" / "vendor" / "harness"
-        manifest = vendored / "MANIFEST.json"
-        if not manifest.exists():
-            fail("sync wrote no MANIFEST.json")
-            return
-
-        files = json.loads(manifest.read_text())["files"]
-        if not files:
-            fail("MANIFEST.json records no files -- layer A would vendor as empty")
-            return
-        ok(f"manifest pins {len(files)} file(s)")
-
-        clean = run([sys.executable, str(VENDOR_SYNC), "check", "--target", str(target)], cwd=ROOT)
-        if clean.returncode != 0:
-            fail(f"check rejects a freshly synced tree: {clean.stdout.strip()}")
-        else:
-            ok("check passes on a freshly synced tree")
-
-        # The gate that earns its keep: a hand edit to generated content must be caught.
-        edited = vendored / next(iter(files))
-        edited.write_text(edited.read_text() + "\nlocal edit\n")
-        tampered = run([sys.executable, str(VENDOR_SYNC), "check", "--target", str(target)], cwd=ROOT)
-        if tampered.returncode == 0:
-            fail("check passes on a hand-edited vendored file -- drift would go unnoticed")
-        else:
-            ok("check catches a hand-edited vendored file")
-
-        # A sync from a dirty checkout would pin a sha whose content exists nowhere. Dirty
-        # the clone rather than this checkout: a gate that edits the repository it is
-        # gating has a failure mode of its own.
-        scratch = source / PLUGIN_DIR / "docs" / "agents" / ".check-dirty.md"
-        scratch.write_text("uncommitted\n")
-        dirty = run(
-            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(source),
-             "--target", str(target)],
-            cwd=ROOT,
-        )
-        scratch.unlink()
-        if dirty.returncode == 0:
-            fail("sync accepts a dirty harness checkout -- the pin would name content that is not in it")
-        elif "uncommitted" not in dirty.stderr + dirty.stdout:
-            fail("sync refused a dirty checkout but did not say why")
-        else:
-            ok("sync refuses a dirty harness checkout")
-
-        # And a file that layer A does not ship must not survive a sync.
-        stray = vendored / "stray.md"
-        stray.write_text("not part of layer A\n")
-        extra = run([sys.executable, str(VENDOR_SYNC), "check", "--target", str(target)], cwd=ROOT)
-        if extra.returncode == 0:
-            fail("check passes with an unrecognised file in the vendored tree")
-        else:
-            ok("check catches an unrecognised vendored file")
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "unittest", "-v", "check_test"],
+        cwd=ROOT / "scripts",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = proc.stdout + proc.stderr
+    if proc.returncode != 0:
+        tail = "\n".join(output.strip().splitlines()[-25:])
+        fail(f"the repository's own suite fails:\n{tail}")
+        return
+    # `unittest` reports the count on stderr, as "Ran N tests in ...".
+    count = next(
+        (line.split()[1] for line in output.splitlines() if line.startswith("Ran ")),
+        "?",
+    )
+    ok(f"{count} of this repository's own test(s) pass")
 
 
 def check_discovery_stubs() -> None:
@@ -1034,7 +991,7 @@ def main() -> int:
 
     check_manifests()
     if not manifests_only:
-        check_vendor_round_trip()
+        check_own_tests()
         check_discovery_stubs()
         check_vendor_freshness()
         check_generated_tree()
