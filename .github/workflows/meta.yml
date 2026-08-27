@@ -15,8 +15,13 @@ name: Meta
 on:
   push:
     branches: [v2]
+  # Deliberately unfiltered, where `push` is not. A `branches: [v2]` filter here means a PR
+  # based on another feature branch reports **no checks at all** -- not a failure, nothing --
+  # and can be merged looking clean. That is what happened to #22, #23 and #24: a four-PR
+  # stack where only the PR based on v2 was ever checked, and the push to v2 after the whole
+  # stack merged was the first time the other three ran anything. Stacking is the normal way
+  # to land an ordered change here, so the trigger has to survive it.
   pull_request:
-    branches: [v2]
 
 permissions:
   contents: read
