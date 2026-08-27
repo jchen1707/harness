@@ -179,6 +179,13 @@ for why that file has the shape it does.
    bump deliberately.
 3. Re-run `vendor_sync.py sync` in each consumer that vendors, and commit the bumped pin.
    Their CI will tell you if you forget.
+4. **Bump the submodule pins here**, once those merge. This step cannot be folded into step
+   1 — the commits it points at do not exist yet — and it is the one that gets skipped,
+   because nothing downstream of it breaks. `check_submodules.py --current` is what makes
+   the window loud: `meta.yml` runs it on a push to `v2` and not on a pull request, so `v2`
+   goes red between steps 1 and 4 saying the mounting is stale, and clears when the pin
+   lands. `--pins` alone never asked this — it checks only that a pin is _on_ its branch —
+   which is how the mounting once drifted eight vendor syncs deep with every check green.
 
 Structural rules about `harness.config.json` go in the schema, never in `check.py`: the
 schema is what every consumer's editor reads, and `config_contract.py` validates against it

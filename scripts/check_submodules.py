@@ -15,10 +15,22 @@ Three callers, one implementation:
     check_submodules.py            human output, non-zero exit  (CI, and by hand)
     check_submodules.py --hook     SessionStart JSON, always exit 0
     check_submodules.py --pins     also ask whether each pin is still on its branch
+    check_submodules.py --current  also ask whether each pin is still up to date
 
 `--pins` is the only mode that needs the remote refs fetched, which is why it is a flag
 rather than the default: a SessionStart hook that reaches the network on every start is a
 hook people turn off.
+
+`--current` is a flag for the opposite reason: it is *expected* to fail for a while. Layer A
+merges here first and the stacks vendor it afterwards, so between those two events the pins
+are legitimately behind and this says so. Run it where that window is the thing you want to
+hear about -- a push to `v2`, once the change is in -- and not on a pull request, where the
+answer is "yes, obviously, that is what this PR is about."
+
+Why it exists at all: `--pins` asks only whether a pin is *on* the branch `.gitmodules`
+names, never whether it is current. That is how the mounting drifted eight vendor syncs deep
+without one check failing, and the mounting is what onboarding, cross-stack review and the
+cross-stack CI job all read.
 
 The hook cannot actually refuse: Claude Code's SessionStart event has no blocking exit
 code — stderr is shown to the user and that is all. So it does the strongest thing the
@@ -201,6 +213,44 @@ def check_pins(root: Path, branches: dict[str, str]) -> list[str]:
     return problems
 
 
+def check_currency(root: Path, branches: dict[str, str]) -> list[str]:
+    """Does each pinned stack still vendor the layer A this ref carries?
+
+    Delegates to `vendor_sync.py check`, which is the freshness check each consumer's own CI
+    runs, so the answer here and the answer there cannot disagree. It is the right judgment
+    already: a pin some commits behind whose vendored files are byte-identical is reported as
+    a note and passes, because layer A did not actually move. Only content drift fails.
+
+    Read against the *working tree*, which `inspect()` has already established matches the
+    pin -- so a currency answer is only meaningful when the base check passed, and `main`
+    skips this when it did not.
+    """
+    vendor_sync = root / "scripts" / "vendor_sync.py"
+    if not vendor_sync.exists():
+        return []
+
+    problems: list[str] = []
+    for path in sorted(branches):
+        if not (root / path / ".git").exists():
+            continue  # Not checked out; `inspect()` has already said so.
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, str(vendor_sync), "check", "--target", str(root / path),
+             "--harness", str(root)],
+            capture_output=True, text=True, check=False, cwd=root,
+        )
+        if result.returncode == 0:
+            continue
+        detail = next(
+            (line.strip() for line in result.stdout.splitlines() if "stale pin" in line),
+            result.stdout.strip().splitlines()[0] if result.stdout.strip() else "",
+        )
+        problems.append(
+            f"{path} pins a commit whose layer A is behind this ref. {detail} "
+            f"Sync and merge in {path}, then bump the pin here."
+        )
+    return problems
+
+
 def main(argv: list[str]) -> int:
     root = repo_root()
     if root is None or not (root / ".gitmodules").exists():
@@ -209,6 +259,10 @@ def main(argv: list[str]) -> int:
     problems, advisories = inspect(root)
     if "--pins" in argv:
         problems += check_pins(root, declared(root))
+    # Only when the pins point where this ref says they do -- otherwise the freshness answer
+    # describes whatever the working tree happens to be sitting on, not the pin.
+    if "--current" in argv and not problems:
+        problems += check_currency(root, declared(root))
 
     if "--hook" in argv:
         if problems:

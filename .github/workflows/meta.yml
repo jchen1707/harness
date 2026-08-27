@@ -15,8 +15,13 @@ name: Meta
 on:
   push:
     branches: [v2]
+  # Deliberately unfiltered, where `push` is not. A `branches: [v2]` filter here means a PR
+  # based on another feature branch reports **no checks at all** -- not a failure, nothing --
+  # and can be merged looking clean. That is what happened to #22, #23 and #24: a four-PR
+  # stack where only the PR based on v2 was ever checked, and the push to v2 after the whole
+  # stack merged was the first time the other three ran anything. Stacking is the normal way
+  # to land an ordered change here, so the trigger has to survive it.
   pull_request:
-    branches: [v2]
 
 permissions:
   contents: read
@@ -48,8 +53,20 @@ jobs:
 
       # No setup step, by design — the checks are stdlib-only Python, like everything
       # else in this repo.
+      # `--current` on a push, not on a pull request. It asks whether each pinned stack still
+      # vendors the layer A this ref carries, and between a layer A merge here and the stacks
+      # vendoring it that is legitimately false -- so on a PR the answer would be "yes,
+      # obviously, that is what this PR is about", and a check that is expected to fail is a
+      # check people learn to ignore. On a push to v2 it is the thing you want to hear: the
+      # mounting is stale, go finish the loop. It clears when the pin bump lands.
+      #
+      # Without it, `--pins` asks only whether a pin is *on* its branch, never whether it is
+      # current -- which is how the mounting drifted eight vendor syncs deep with every check
+      # green.
       - name: The submodules match this ref
-        run: python3 scripts/check_submodules.py --pins
+        run: |
+          python3 scripts/check_submodules.py --pins \
+            ${{ github.event_name == 'push' && '--current' || '' }}
 
   # The job phase 3 deferred, and phase 4 earns. Until now layer A was prose, and prose
   # cannot break a build; it now carries a workflow, a config schema and the review frames
