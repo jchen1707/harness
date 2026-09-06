@@ -380,5 +380,49 @@ class MountingCurrency(unittest.TestCase):
         self.assertTrue(self.currency(1, stdout="", stderr="boom"))
 
 
+class CompositionSafetyTests(unittest.TestCase):
+    def test_schema_checks_unique_items_and_dynamic_requirements(self):
+        from config_contract import violations
+        self.assertTrue(violations(["x", "x"], {"type": "array", "uniqueItems": True}))
+        self.assertTrue(violations({"x": 12}, {"additionalProperties": {"type": "string"}}))
+        self.assertFalse(violations({"x": "ok"}, {"additionalProperties": {"type": "string"}}))
+
+    def test_composer_refuses_symlinks_collisions_and_invalid_config_atomically(self):
+        from compose_project import compose
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            a, b = root / "a", root / "b"
+            a.mkdir()
+            b.mkdir()
+            (a / "file.txt").write_text("a")
+            (b / "file.txt").write_text("b")
+            catalog = {"schemaVersion": 1, "manifest": {"path": "package.json", "format": "json", "body": {}},
+                       "config": {"gates": [{"name": "test", "kind": "test", "run": ["test"]}]},
+                       "presets": {"minimal": ["a", "b"]},
+                       "components": {"a": {"template": "a"}, "b": {"template": "b"}}}
+            path, destination = root / "catalog.json", root / "output"
+            def render():
+                path.write_text(json.dumps(catalog))
+                compose(path, "minimal", [], destination, "example")
+            with self.assertRaisesRegex(ValueError, "collision"):
+                render()
+            self.assertFalse(destination.exists())
+            catalog["components"]["b"]["overrides"] = ["file.txt"]
+            (b / "linked").symlink_to(a / "file.txt")
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                render()
+            self.assertFalse(destination.exists())
+            (b / "linked").unlink()
+            catalog["config"]["unknown"] = True
+            with self.assertRaisesRegex(ValueError, "contract"):
+                render()
+            self.assertFalse(destination.exists())
+            del catalog["config"]["unknown"]
+            with patch("compose_project.initialise"):
+                render()
+            self.assertEqual((destination / "file.txt").read_text(), "b")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
