@@ -1,5 +1,6 @@
 {
   "name": "__PROJECT__-api",
+  "tests": ["tests/"],
   "install": ["uv", "sync"],
   "dev": {
     "run": ["uv", "run", "uvicorn", "api.main:app", "--reload"],

@@ -440,5 +440,30 @@ class CompositionSafetyTests(unittest.TestCase):
             self.assertEqual((destination / "file.txt").read_text(), "b")
 
 
+class ScaffoldTestBoundaries(unittest.TestCase):
+    def test_generated_apps_declare_test_paths_that_exclude_implementation(self) -> None:
+        for split in (False, True):
+            with self.subTest(split=split), tempfile.TemporaryDirectory() as temporary:
+                destination = Path(temporary) / "project"
+                command = [sys.executable, str(ROOT / "scripts/new_project.py"), "create",
+                           "acceptance-demo", "--into", str(destination)]
+                if split:
+                    command.append("--split")
+                created = run(command)
+                self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+                for app, test, implementation in (
+                    ("api", "tests/test_health.py", "src/api/main.py"),
+                    ("web", "src/health.test.ts", "src/health.ts"),
+                ):
+                    root = destination / (f"acceptance-demo-{app}" if split else f"apps/{app}")
+                    config = json.loads((root / "harness.config.json").read_text())
+                    self.assertTrue(config.get("tests"), f"{app} has no test boundary")
+                    selected = run(["git", "ls-files", "--", *config["tests"]], cwd=root)
+                    self.assertEqual(selected.returncode, 0, selected.stderr)
+                    files = selected.stdout.splitlines()
+                    self.assertIn(test, files)
+                    self.assertNotIn(implementation, files)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
