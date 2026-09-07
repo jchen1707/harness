@@ -554,7 +554,10 @@ def check_layer_a_composition() -> None:
         fail("full-review.js is missing from the plugin")
         return
     body = workflow.read_text(encoding="utf-8")
-    declared = set(re.findall(r"agent: '([\w-]+)'", body))
+    catalog = workflow.with_name("review-axes.json")
+    declared = {axis["agent"] for axis in json.loads(catalog.read_text())}
+    if "review-axes.json" not in body:
+        fail("full-review.js does not load the shared axis catalog")
     if declared != set(SHARED_AXES):
         fail(
             "full-review.js declares "

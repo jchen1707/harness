@@ -141,7 +141,15 @@ def initialise(repo: Path, project: str, agnostic: bool, commit: bool, message: 
     stubs = 0
     if agnostic:
         run(
-            [sys.executable, str(VENDOR_SYNC), "sync", "--harness", str(HARNESS), "--target", str(repo)],
+            [
+                sys.executable,
+                str(VENDOR_SYNC),
+                "sync",
+                "--harness",
+                str(HARNESS),
+                "--target",
+                str(repo),
+            ],
             cwd=HARNESS,
         )
         # `sync` writes the discovery stubs itself, so there is one implementation of what a
@@ -151,8 +159,17 @@ def initialise(repo: Path, project: str, agnostic: bool, commit: bool, message: 
     if commit:
         run(["git", "add", "-A"], cwd=repo)
         run(
-            ["git", "-c", "user.name=harness", "-c", "user.email=harness@localhost",
-             "commit", "--quiet", "-m", message],
+            [
+                "git",
+                "-c",
+                "user.name=harness",
+                "-c",
+                "user.email=harness@localhost",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
             cwd=repo,
         )
     return stubs
@@ -195,7 +212,10 @@ def cmd_split(project: str, into: Path, api: str, web: str, agnostic: bool, comm
     stubs = 0
     for repo in (api_repo, web_repo):
         stubs += initialise(
-            repo, project, agnostic, commit,
+            repo,
+            project,
+            agnostic,
+            commit,
             f"chore: scaffold {repo.name} from the harness templates",
         )
 
@@ -233,7 +253,10 @@ def cmd_create(project: str, into: Path, api: str, web: str, agnostic: bool, com
     written += copy_template(TEMPLATES / ("agnostic" if agnostic else "plugin"), into, project)
 
     stubs = initialise(
-        into, project, agnostic, commit,
+        into,
+        project,
+        agnostic,
+        commit,
         f"chore: scaffold {project} from the harness templates",
     )
 
@@ -259,6 +282,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    compose = sub.add_parser("compose", help="compose a standalone project from a stack catalog")
+    compose.add_argument("project")
+    compose.add_argument("--catalog", type=Path, required=True)
+    compose.add_argument("--preset", required=True)
+    compose.add_argument("--component", action="append", default=[])
+    compose.add_argument("--into", type=Path, required=True)
+    compose.add_argument("--plugin", action="store_true")
+    compose.add_argument("--commit", action="store_true")
+
     create = sub.add_parser("create", help="scaffold a new product repository")
     create.add_argument("project", help="the project name, in kebab-case")
     create.add_argument("--api", choices=sorted(APIS), default="python")
@@ -279,6 +311,21 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    if args.cmd == "compose":
+        from compose_project import compose
+
+        if not NAME.fullmatch(args.project):
+            raise SystemExit("Project name must use kebab-case")
+        compose(
+            args.catalog.resolve(),
+            args.preset,
+            args.component,
+            args.into.resolve(),
+            args.project,
+            agnostic=not args.plugin,
+            commit=args.commit,
+        )
+        return 0
     if not NAME.match(args.project):
         raise SystemExit(
             f"{args.project!r} is not a usable project name. Lowercase letters, digits and "
@@ -289,9 +336,7 @@ def main() -> int:
         # Two repositories side by side, so `--into` names their parent rather than a repo.
         into = (args.into or Path.cwd()).resolve()
         into.mkdir(parents=True, exist_ok=True)
-        return cmd_split(
-            args.project, into, args.api, args.web, args.agnostic, not args.no_commit
-        )
+        return cmd_split(args.project, into, args.api, args.web, args.agnostic, not args.no_commit)
 
     into = (args.into or Path.cwd() / args.project).resolve()
     return cmd_create(args.project, into, args.api, args.web, args.agnostic, not args.no_commit)
