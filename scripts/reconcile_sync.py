@@ -113,6 +113,19 @@ def managed_pr(repo):
     return prs[0] if prs else None
 
 
+def pr_body(summary):
+    return (MARKER + '\n\n## Summary\n\n' + summary +
+            '\n\n## What changed\n\nThis PR contains only the generated delivery changes described above. '
+            'Source ownership remains upstream; stack configuration and application code are unchanged.\n\n'
+            '## How to demo\n\nInspect the generated diff and the required checks on this PR. '
+            'For vendor updates, run the upstream vendor_sync.py check command against this checkout. '
+            'For parent pins, run python3 scripts/check_submodules.py --pins.\n\n'
+            '## Evidence\n\nCI results are attached to this exact PR revision. Auto-merge waits for '
+            'all required checks and an up-to-date base; this description makes no claim that pending checks passed.\n\n'
+            '## Risks and follow-ups\n\nFailed checks pause delivery. The coordinator retries without '
+            'overwriting human commits; the parent pins wait for every generated publication.\n')
+
+
 def push_pr(repo, root, title, body, apply):
     if not git(root, 'diff', '--cached', '--name-only'):
         print(f'{repo}: no update needed')
@@ -122,6 +135,7 @@ def push_pr(repo, root, title, body, apply):
         return
     protected(repo)
     pr = managed_pr(repo)
+    payload = {'title': title, 'body': pr_body(body)}
     refs = git(root, 'ls-remote', 'origin', f'refs/heads/{BRANCH}')
     expected = refs.split()[0] if refs else ''
     if expected:
@@ -134,12 +148,13 @@ def push_pr(repo, root, title, body, apply):
         branch_parent = git(root, 'rev-parse', f'origin/{BRANCH}^')
         tree = git(root, 'write-tree')
         if pr and branch_parent == base and tree == git(root, 'rev-parse', f'origin/{BRANCH}^{{tree}}'):
+            if pr.get('body') != payload['body'] or pr.get('title') != title:
+                api(f'repos/{repo}/pulls/{pr["number"]}', payload, 'PATCH')
             enable_auto_merge(repo, pr['number'], expected)
             return
     git(root, 'commit', '-qm', title, '-m', 'Harness-Automation: managed-v1')
     head = git(root, 'rev-parse', 'HEAD')
     git(root, 'push', f'--force-with-lease=refs/heads/{BRANCH}:{expected}', 'origin', f'HEAD:refs/heads/{BRANCH}')
-    payload = {'title': title, 'body': MARKER + '\n\n' + body}
     if pr:
         pr = api(f'repos/{repo}/pulls/{pr["number"]}', payload, 'PATCH')
     else:

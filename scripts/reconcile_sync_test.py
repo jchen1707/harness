@@ -44,6 +44,31 @@ class PolicyTests(unittest.TestCase):
             self.assertIn('--auto', args)
 
 
+class DescriptionTests(unittest.TestCase):
+    def test_delivery_description_satisfies_stack_template(self):
+        body = sync.pr_body('Generated vendor update from an exact upstream commit.')
+        for heading in ['## Summary', '## What changed', '## How to demo', '## Evidence']:
+            self.assertIn(heading, body)
+        self.assertIn(sync.MARKER, body)
+        self.assertGreater(len(body), 200)
+
+    def test_unchanged_tree_repairs_body_without_restarting_code_checks(self):
+        def fake_git(root, *args):
+            if args[0] == 'diff': return 'generated/file'
+            if args[0] == 'ls-remote': return 'head refs/heads/' + sync.BRANCH
+            if args[0] == 'log': return sync.EMAIL
+            if args[0] == 'write-tree': return 'tree'
+            if args[0] == 'rev-parse': return 'tree' if args[1].endswith('{tree}') else 'base'
+            return ''
+        pr = {'number': 42, 'body': sync.MARKER + ' old body', 'title': 'title'}
+        with patch.object(sync, 'git', side_effect=fake_git) as git, \
+             patch.object(sync, 'protected'), patch.object(sync, 'managed_pr', return_value=pr), \
+             patch.object(sync, 'api') as api, patch.object(sync, 'enable_auto_merge'):
+            sync.push_pr('owner/repo', Path('/fixture'), 'title', 'summary', True)
+            self.assertIn('## Evidence', api.call_args.args[1]['body'])
+            self.assertFalse(any(call.args[1] == 'push' for call in git.call_args_list))
+
+
 class VendorConvergenceTests(unittest.TestCase):
     def test_parent_pin_only_changes_do_not_start_another_sync_round(self):
         with tempfile.TemporaryDirectory() as temp:
