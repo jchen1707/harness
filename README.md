@@ -1,7 +1,8 @@
 # harness
 
 The stack-neutral layer shared by [`python-harness`](https://github.com/jchen1707/python-harness)
-and [`frontend-harness`](https://github.com/jchen1707/frontend-harness), owned in one place and
+[`frontend-harness`](https://github.com/jchen1707/frontend-harness),
+and [`go-harness`](https://github.com/jchen1707/go-harness), owned in one place and
 delivered two ways.
 
 ## Install (Claude Code)
@@ -84,13 +85,13 @@ git clone --recursive https://github.com/jchen1707/harness.git
 git config submodule.recurse true    # in the clone; see below
 ```
 
-`python-harness/` and `frontend-harness/` are submodules so that one clone gives you both
-worlds — onboarding, cross-stack review, and a CI job that can compare the two.
+`python-harness/`, `frontend-harness/` and `go-harness/` are read-only submodules so one clone
+provides all three stacks for onboarding, cross-stack review and CI comparison.
 
 **They are read-only. A stack's work is never committed through this repo.** Clone the
 stack, branch there, open the PR there. Layer A does not travel this way either: it
 arrives as the plugin or as a vendored tree, because `git worktree add` leaves a submodule
-directory empty with no error and both stacks run worktree-per-ticket.
+directory empty with no error and all stacks run worktree-per-ticket.
 
 `git checkout` does not move a submodule's working tree, so without `submodule.recurse`
 you can stand on `v2` and read the stacks' `main`. `scripts/check_submodules.py` runs on
@@ -99,3 +100,7 @@ you can stand on `v2` and read the stacks' `main`. `scripts/check_submodules.py`
 ## Branches
 
 `v2` is authored. `main` is generated from it and must never be hand-edited. See `AGENTS.md`.
+
+Go targets standard-library backend services and workers, with Backend (`BAC`) tracking.
+Its own `.go-version` declares the cross-stack CI toolchain. Go product templates are not
+included; the existing product scaffolds remain Python and frontend compositions.

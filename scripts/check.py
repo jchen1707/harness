@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 import config_contract
+from check_submodules import declared
 
 # When gating a *generated* tree, this script is invoked from the source checkout while
 # the working directory is the built tree. Prefer the working directory when it looks like
@@ -385,10 +386,10 @@ def check_generated_tree() -> None:
 
 
 def check_shared_generator() -> None:
-    """The generator is one file in three repos, and nothing until now noticed a drift.
+    """The generator is one file shared by the mounted repos, and nothing until now noticed a drift.
 
-    `generate_main.py` is byte-identical in both stacks and here; only `transform.json`
-    differs. That was maintained by hand because no repo could see the other two. The
+    `generate_main.py` is byte-identical in every stack and here; only `transform.json`
+    differs. That was maintained by hand because no stack could see its siblings. The
     submodules are what make it checkable, which is most of why they are mounted.
     """
     print("shared generator")
@@ -398,7 +399,7 @@ def check_shared_generator() -> None:
         return
 
     checked = 0
-    for name in ("python-harness", "frontend-harness"):
+    for name in declared(ROOT):
         theirs = ROOT / name / GENERATOR
         if not theirs.exists():
             print(f"  skip {name} is not checked out -- run `git submodule update --init`")
@@ -407,7 +408,7 @@ def check_shared_generator() -> None:
         if theirs.read_bytes() != mine.read_bytes():
             fail(
                 f"{name}/{GENERATOR} differs from this repo's copy. It is one file in "
-                f"three repos -- reconcile it before either branch is regenerated."
+                f"the mounted repos -- reconcile it before either branch is regenerated."
             )
         else:
             ok(f"{name} carries the same generator")
@@ -632,7 +633,7 @@ def check_stack_configs() -> None:
     point of the file is that the shared half stops working without it.
     """
     print("stack configs")
-    for name in ("python-harness", "frontend-harness"):
+    for name in declared(ROOT):
         stack = ROOT / name
         if not stack.exists():
             print(f"  skip {name} is not checked out -- run `git submodule update --init`")
