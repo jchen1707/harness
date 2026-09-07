@@ -104,3 +104,6 @@ you can stand on `v2` and read the stacks' `main`. `scripts/check_submodules.py`
 Go targets standard-library backend services and workers, with Backend (`BAC`) tracking.
 Its own `.go-version` declares the cross-stack CI toolchain. Go product templates are not
 included; the existing product scaffolds remain Python and frontend compositions.
+
+Shared changes propagate through checked, automatically merged delivery PRs. See
+[automated harness delivery](docs/sync-automation.md) for the rollout and recovery process.

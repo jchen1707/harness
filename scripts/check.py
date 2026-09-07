@@ -136,7 +136,7 @@ def check_own_tests() -> None:
         return
 
     proc = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "unittest", "-v", "check_test"],
+        [sys.executable, "-m", "unittest", "-v", "check_test", "reconcile_sync_test"],
         cwd=ROOT / "scripts",
         capture_output=True,
         text=True,
