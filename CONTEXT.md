@@ -17,7 +17,7 @@ Generated into consumers and never edited there.
 
 **Layer B — stack-specific.** What is irreducibly one stack's: its gates, its hook wiring,
 its `docs/architecture.md`, its path-scoped instruction files, each frame's **checklist**.
-Lives in `python-harness` / `frontend-harness`, and diverges on purpose.
+Lives in `python-harness` / `frontend-harness` / `go-harness`, and diverges on purpose.
 
 **Layer C — the product.** An actual application. Scaffolded once from `templates/` and
 owned by whoever scaffolded it. Nothing here runs against a layer C repo.
@@ -77,7 +77,7 @@ reviews on general advice and reports a confident clean.
 
 ## Delivery
 
-**Stack.** One of the two consuming harnesses, `python-harness` or `frontend-harness`.
+**Stack.** One of the three consuming harnesses: `python-harness`, `frontend-harness`, or `go-harness`.
 Mounted here as submodules for reading. Work is never committed to a stack through this
 repo.
 

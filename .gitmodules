@@ -1,6 +1,6 @@
-# Both stacks, mounted for reading. This is a meta-repo — onboarding, cross-stack
+# All stacks, mounted for reading. This is a meta-repo — onboarding, cross-stack
 # review, and one CI job that can see both worlds at once. Layer A never travels this
-# way: `git worktree add` leaves a submodule directory empty with no error, and both
+# way: `git worktree add` leaves a submodule directory empty with no error, and all
 # stacks run worktree-per-ticket. See CLAUDE.md.
 #
 # `branch` is the branch flavour of this parent ref, which is why it is region-gated:
@@ -14,4 +14,8 @@
 [submodule "frontend-harness"]
 	path = frontend-harness
 	url = https://github.com/jchen1707/frontend-harness.git
+	branch = main
+[submodule "go-harness"]
+	path = go-harness
+	url = https://github.com/jchen1707/go-harness.git
 	branch = main
