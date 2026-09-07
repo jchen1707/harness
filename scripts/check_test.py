@@ -419,6 +419,22 @@ class CompositionSafetyTests(unittest.TestCase):
                 render()
             self.assertFalse(destination.exists())
             del catalog["config"]["unknown"]
+            (b / ".git").mkdir()
+            (b / ".git/config").write_text("invalid Git configuration")
+            with self.assertRaisesRegex(ValueError, "Reserved"):
+                render()
+            self.assertFalse(destination.exists())
+            (b / ".git/config").unlink()
+            (b / ".git").rmdir()
+            (b / "AGENTS.md").write_text("override")
+            catalog["components"]["b"]["overrides"].append("AGENTS.md")
+            with self.assertRaisesRegex(ValueError, "Reserved"):
+                render()
+            (b / "AGENTS.md").unlink()
+            catalog["manifest"]["path"] = ".git"
+            with self.assertRaisesRegex(ValueError, "Reserved"):
+                render()
+            catalog["manifest"]["path"] = "package.json"
             with patch("compose_project.initialise"):
                 render()
             self.assertEqual((destination / "file.txt").read_text(), "b")

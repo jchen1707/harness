@@ -13,6 +13,26 @@ from compose_project import compose
 from new_project import HARNESS
 
 
+def missing_review_inputs(destination: Path, config: dict) -> list[str]:
+    """Check composed language-specific checklists against the shared frame catalog."""
+    shared = HARNESS / "plugins/harness"
+    axes = json.loads((shared / "workflows/review-axes.json").read_text())
+    review = config.get("review", {})
+    if review.get("ninthAxis"):
+        axes.append(review["ninthAxis"])
+    missing = []
+    for axis in axes:
+        name = axis["agent"] + ".md"
+        own = destination / review.get("agentDir", ".agents/agents") / name
+        frame = own if own.is_file() else shared / "agents" / name
+        checklist = destination / review.get("checklistDir", "docs/agents/subagents") / name
+        if not frame.is_file():
+            missing.append(f"frame:{name}")
+        if not checklist.is_file():
+            missing.append(f"checklist:{name}")
+    return missing
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("catalog", type=Path)
@@ -27,20 +47,51 @@ def main() -> int:
             destination = Path(temporary) / "project"
             compose(catalog, preset, [], destination, f"validate-{preset}", agnostic=False)
             config = json.loads((destination / "harness.config.json").read_text())
-            install = subprocess.run(config["install"], cwd=destination, text=True, capture_output=True)
-            report = {"preset": preset, "install_exit": install.returncode,
-                      "install_output": install.stdout + install.stderr}
+            missing = missing_review_inputs(destination, config)
+            failed |= bool(missing)
+            install = subprocess.run(
+                config["install"],
+                cwd=destination,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=600,
+            )
+            report = {
+                "preset": preset,
+                "missing_review_inputs": missing,
+                "install_exit": install.returncode,
+                "install_output": install.stdout + install.stderr,
+            }
             if install.returncode == 0:
                 gates = subprocess.run(
-                    ["node", str(HARNESS / "plugins/harness/hooks/gate_report.mjs"), "--force", "--json"],
-                    cwd=destination, text=True, capture_output=True,
+                    [
+                        "node",
+                        str(HARNESS / "plugins/harness/hooks/gate_report.mjs"),
+                        "--force",
+                        "--json",
+                        "--authority",
+                        str(destination),
+                        "--profile",
+                        config.get("delivery", {}).get("default", ""),
+                    ],
+                    cwd=destination,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=1800,
                 )
                 report["gates"] = json.loads(gates.stdout)
                 failed |= gates.returncode != 0
             else:
                 failed = True
             (args.reports / f"{preset}.json").write_text(json.dumps(report, indent=2) + "\n")
-            print(f"{preset}: {report.get('gates', {}).get('verdict', 'install failed')}", flush=True)
+            verdict = (
+                "incomplete review inputs"
+                if missing
+                else report.get("gates", {}).get("verdict", "install failed")
+            )
+            print(f"{preset}: {verdict}", flush=True)
     return int(failed)
 
 

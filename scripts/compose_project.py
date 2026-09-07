@@ -60,6 +60,8 @@ def compose(
     manifest_path = Path(catalog["manifest"]["path"])
     if manifest_path.is_absolute() or ".." in manifest_path.parts or len(manifest_path.parts) != 1:
         raise ValueError("Manifest must be a root filename")
+    if manifest_path.name in {".git", "harness.config.json", "AGENTS.md", "README.md"}:
+        raise ValueError("Reserved manifest destination")
     if catalog["manifest"]["format"] not in {"toml", "json"}:
         raise ValueError("Unsupported manifest format")
     if preset not in catalog["presets"]:
@@ -98,7 +100,10 @@ def compose(
         "",
     ]
     # Validate every source and collision before creating the destination.
-    files = {manifest_path, Path("harness.config.json"), Path("AGENTS.md"), Path("README.md")}
+    reserved = {manifest_path, Path("harness.config.json"), Path("AGENTS.md"), Path("README.md")}
+    adapter = HARNESS / "templates" / ("agnostic" if agnostic else "plugin")
+    reserved.update(path.relative_to(adapter) for path in adapter.rglob("*") if path.is_file())
+    files = set(reserved)
     for name in selected:
         component = catalog["components"][name]
         template = component.get("template")
@@ -115,6 +120,8 @@ def compose(
             if not origin.is_file():
                 continue
             target = origin.relative_to(source)
+            if ".git" in target.parts or target in reserved:
+                raise ValueError(f"Reserved template destination: {target}")
             if target in files and target not in overrides:
                 raise ValueError(f"Undeclared template collision: {target}")
             files.add(target)
