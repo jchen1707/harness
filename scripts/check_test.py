@@ -28,6 +28,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+import check_submodules
 from pathlib import Path
 from unittest.mock import patch
 
@@ -170,7 +172,7 @@ class ConfigContract(unittest.TestCase):
 
     def test_the_shipped_configs_conform(self) -> None:
         """Both stacks and every template, against the contract they are handed."""
-        paths = [ROOT / s / "harness.config.json" for s in ("python-harness", "frontend-harness")]
+        paths = [ROOT / s / "harness.config.json" for s in check_submodules.declared(ROOT)]
         paths += sorted((ROOT / "templates").rglob("harness.config.json"))
         checked = 0
         for path in paths:
@@ -560,6 +562,49 @@ class ScaffoldTestBoundaries(unittest.TestCase):
                     files = selected.stdout.splitlines()
                     self.assertIn(test, files)
                     self.assertNotIn(implementation, files)
+
+
+
+
+class MountedStackDiscoveryTests(unittest.TestCase):
+    """New stacks must participate without extending a second inventory."""
+
+    def test_third_stack_is_discovered_and_generator_drift_fails(self):
+        import check
+        import check_submodules
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / '.gitmodules').write_text(''.join(
+                f'[submodule "{name}"]\n path = {name}\n branch = v2\n'
+                for name in ['python-harness', 'frontend-harness', 'go-harness']))
+            self.assertEqual(len(check_submodules.declared(root)), 3)
+            generator = root / check.GENERATOR
+            generator.parent.mkdir(parents=True)
+            generator.write_text('shared generator')
+            for name in check_submodules.declared(root):
+                target = root / name / check.GENERATOR
+                target.parent.mkdir(parents=True)
+                target.write_text('drift' if name == 'go-harness' else 'shared generator')
+            with patch.object(check, 'ROOT', root), patch.object(check, 'failures', []):
+                check.check_shared_generator()
+                self.assertEqual(len(check.failures), 1)
+                self.assertIn('go-harness', check.failures[0])
+
+    def test_third_stack_invalid_config_is_checked(self):
+        import check
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / '.gitmodules').write_text('[submodule "go-harness"]\n path = go-harness\n branch = v2\n')
+            stack = root / 'go-harness'
+            stack.mkdir()
+            (stack / 'harness.config.json').write_text('{"name":"go-harness","gates":[],"unknown":true}')
+            with patch.object(check, 'ROOT', root), patch.object(check, 'failures', []):
+                check.check_stack_configs()
+                self.assertTrue(any('go-harness' in problem and 'unknown' in problem for problem in check.failures))
 
 
 if __name__ == "__main__":
