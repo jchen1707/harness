@@ -57,6 +57,7 @@ SUPPORTED = frozenset(
         "if",
         "items",
         "minItems",
+        "uniqueItems",
         "minLength",
         "properties",
         "required",
@@ -131,6 +132,8 @@ def _check(document: Any, schema: dict, root: dict, path: str, out: list[str]) -
             out.append(f"{where} is shorter than {schema['minLength']} character(s)")
 
     if isinstance(document, list):
+        if schema.get("uniqueItems") and len({json.dumps(item, sort_keys=True) for item in document}) != len(document):
+            out.append(f"{where} must contain unique items")
         if "minItems" in schema and len(document) < schema["minItems"]:
             out.append(f"{where} needs at least {schema['minItems']} item(s)")
         if "items" in schema:
@@ -146,6 +149,10 @@ def _check(document: Any, schema: dict, root: dict, path: str, out: list[str]) -
             for key in document:
                 if key not in properties:
                     out.append(f"{where} has an unknown key {key!r}")
+        if isinstance(schema.get("additionalProperties"), dict):
+            for key, value in document.items():
+                if key not in properties:
+                    _check(value, schema["additionalProperties"], root, f"{where}.{key}", out)
         for key, subschema in properties.items():
             if key in document:
                 _check(document[key], subschema, root, f"{where}.{key}" if path else key, out)
