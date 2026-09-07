@@ -8,11 +8,11 @@ two adapters that deliver it. Nothing here runs against a product codebase.
 
 ## The rule that decides where a file goes
 
-| Layer                  | What it is                                                                                  | Where it lives                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| **A — stack-neutral**  | Shared review frames, skills, commands, `full-review.js`, `docs/agents/`                    | **Here.** Generated into consumers, never edited there.     |
+| Layer                  | What it is                                                                                  | Where it lives                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **A — stack-neutral**  | Shared review frames, skills, commands, `full-review.js`, `docs/agents/`                    | **Here.** Generated into consumers, never edited there.                    |
 | **B — stack-specific** | Gates, hook config, `docs/architecture.md`, path-scoped `AGENTS.md`, each frame's checklist | `python-harness` / `frontend-harness` / `go-harness`. Diverges on purpose. |
-| **C — the product**    | An actual application                                                                       | A scaffolded product repo.                                  |
+| **C — the product**    | An actual application                                                                       | A scaffolded product repo.                                                 |
 
 If a file states a fact true in only one stack — a team key, a directory layout, a toolchain —
 it is layer B and does not belong here. Split it: the doctrine comes here, the fact stays
