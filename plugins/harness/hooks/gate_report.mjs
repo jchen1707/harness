@@ -99,9 +99,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-import { loadConfig, repoRelative, runArgv, tail } from './lib.mjs';
-import { dispatch, gatedChange, STOP_KINDS } from './verify.mjs';
-import { applyDelivery, resolveDelivery } from './delivery_policy.mjs';
+import { repoRelative, runArgv, tail } from './lib.mjs';
+import { deliveryDispatch, gatedChange, STOP_KINDS } from './verify.mjs';
 
 const MAX_LINES = 40;
 const GATE_TIMEOUT = 540_000;
@@ -492,21 +491,11 @@ function humanReport(report) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cwd = args.cwd || process.cwd();
-  const source = loadConfig(args.authority || cwd);
-  const dispatched = dispatch(source);
-  const rootPolicy = resolveDelivery(source, null, args.profile || '');
-  const root = { ...source, root: resolve(cwd) };
-  const targets = dispatched.targets.map((target) => {
-    const policy =
-      target.root === source.root
-        ? rootPolicy
-        : resolveDelivery(target, rootPolicy, args.profile || '');
-    return applyDelivery(
-      { ...target, root: resolve(cwd, repoRelative(target.root, source.root)) },
-      policy,
-    );
-  });
-  const missing = dispatched.missing;
+  const { root, targets, missing } = deliveryDispatch(
+    cwd,
+    args.authority || process.env.HARNESS_AUTHORITY_ROOT || '',
+    args.profile || process.env.HARNESS_DELIVERY_PROFILE || '',
+  );
 
   const report = buildReport({
     root,
