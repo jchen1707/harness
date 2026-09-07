@@ -39,7 +39,7 @@ it governed, which is the one place a Python author would never read.
 | `/lint`        | `--kinds lint,format,types --force`                                  |
 | `/test`        | `--kinds test --force`, plus `--gate <name>` for an opt-in tier      |
 | `/verify`      | `--force`, plus `--gate <name>` or `--all`                           |
-| cross-stack CI | `--json`, against the freshly synced vendored tree (ADR-0003)        |
+| cross-stack CI | `--json --force`, when synced content changes (ADR-0003)        |
 | the factory    | `--json --base <ref>`                                                |
 
 No caller reads `harness.config.json` and selects gates itself. Prose counts as a caller:

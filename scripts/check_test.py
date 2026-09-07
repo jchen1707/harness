@@ -29,6 +29,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
@@ -307,6 +308,102 @@ class CrossStackVerdict(unittest.TestCase):
             return subprocess.CompletedProcess(args, 1, stdout="", stderr="boom")
 
         self.assertTrue(self.cross_stack.layer_a_moved(Path("stack"), fake))
+
+    def test_instruction_only_sync_runs_declared_gates(self) -> None:
+        """Real sync + reporter: shared contracts move outside Stop-hook filters."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory).resolve() / "source"
+            target = Path(directory).resolve() / "consumer"
+            target.mkdir()
+
+            def checked(args, cwd=ROOT):
+                result = run(args, cwd)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            checked(["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(source)])
+            checked(["git", "init", "--quiet"], target)
+            config = {
+                "name": "consumer",
+                "hooks": {"gatedPaths": ["src"], "gatedExtensions": [".py"]},
+                "gates": [
+                    {
+                        "name": "contract",
+                        "kind": "test",
+                        "run": [
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; Path('executed').touch()",
+                        ],
+                    },
+                    {
+                        "name": "disabled",
+                        "kind": "test",
+                        "enabled": False,
+                        "run": [sys.executable, "-c", "raise SystemExit(1)"],
+                    },
+                    {
+                        "name": "integration",
+                        "kind": "integration",
+                        "when": "explicit",
+                        "run": [sys.executable, "-c", "raise SystemExit(1)"],
+                    },
+                ],
+            }
+            (target / "harness.config.json").write_text(json.dumps(config))
+            checked(
+                [
+                    sys.executable,
+                    str(VENDOR_SYNC),
+                    "sync",
+                    "--harness",
+                    str(source),
+                    "--target",
+                    str(target),
+                ]
+            )
+            checked(["git", "add", "."], target)
+            checked(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "baseline",
+                ],
+                target,
+            )
+            with patch.object(self.cross_stack, "ROOT", source):
+                self.assertEqual(self.cross_stack.gate_stack(target, []), (False, []))
+                self.assertFalse((target / "executed").exists())
+                instruction = source / PLUGIN_DIR / "docs/agents/test-design.md"
+                instruction.write_text(instruction.read_text() + "\nContract revision.\n")
+                checked(["git", "add", "."], source)
+                checked(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Test",
+                        "-c",
+                        "user.email=test@example.invalid",
+                        "-c",
+                        "core.hooksPath=/dev/null",
+                        "commit",
+                        "--quiet",
+                        "-m",
+                        "contract",
+                    ],
+                    source,
+                )
+                ran, problems = self.cross_stack.gate_stack(target, [])
+                self.assertTrue(ran, problems)
+                self.assertEqual(problems, [])
+                self.assertTrue((target / "executed").exists())
 
     def test_a_run_counts_only_gates_that_executed(self) -> None:
         report = self.report(
