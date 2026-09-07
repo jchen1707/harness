@@ -29,6 +29,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR_SYNC = ROOT / "scripts" / "vendor_sync.py"
@@ -308,6 +309,102 @@ class CrossStackVerdict(unittest.TestCase):
 
         self.assertTrue(self.cross_stack.layer_a_moved(Path("stack"), fake))
 
+    def test_instruction_only_sync_runs_declared_gates(self) -> None:
+        """Real sync + reporter: shared contracts move outside Stop-hook filters."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory).resolve() / "source"
+            target = Path(directory).resolve() / "consumer"
+            target.mkdir()
+
+            def checked(args, cwd=ROOT):
+                result = run(args, cwd)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            checked(["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(source)])
+            checked(["git", "init", "--quiet"], target)
+            config = {
+                "name": "consumer",
+                "hooks": {"gatedPaths": ["src"], "gatedExtensions": [".py"]},
+                "gates": [
+                    {
+                        "name": "contract",
+                        "kind": "test",
+                        "run": [
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; Path('executed').touch()",
+                        ],
+                    },
+                    {
+                        "name": "disabled",
+                        "kind": "test",
+                        "enabled": False,
+                        "run": [sys.executable, "-c", "raise SystemExit(1)"],
+                    },
+                    {
+                        "name": "integration",
+                        "kind": "integration",
+                        "when": "explicit",
+                        "run": [sys.executable, "-c", "raise SystemExit(1)"],
+                    },
+                ],
+            }
+            (target / "harness.config.json").write_text(json.dumps(config))
+            checked(
+                [
+                    sys.executable,
+                    str(VENDOR_SYNC),
+                    "sync",
+                    "--harness",
+                    str(source),
+                    "--target",
+                    str(target),
+                ]
+            )
+            checked(["git", "add", "."], target)
+            checked(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "baseline",
+                ],
+                target,
+            )
+            with patch.object(self.cross_stack, "ROOT", source):
+                self.assertEqual(self.cross_stack.gate_stack(target, []), (False, []))
+                self.assertFalse((target / "executed").exists())
+                instruction = source / PLUGIN_DIR / "docs/agents/test-design.md"
+                instruction.write_text(instruction.read_text() + "\nContract revision.\n")
+                checked(["git", "add", "."], source)
+                checked(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Test",
+                        "-c",
+                        "user.email=test@example.invalid",
+                        "-c",
+                        "core.hooksPath=/dev/null",
+                        "commit",
+                        "--quiet",
+                        "-m",
+                        "contract",
+                    ],
+                    source,
+                )
+                ran, problems = self.cross_stack.gate_stack(target, [])
+                self.assertTrue(ran, problems)
+                self.assertEqual(problems, [])
+                self.assertTrue((target / "executed").exists())
+
     def test_a_run_counts_only_gates_that_executed(self) -> None:
         report = self.report(
             "pass",
@@ -438,6 +535,31 @@ class CompositionSafetyTests(unittest.TestCase):
             with patch("compose_project.initialise"):
                 render()
             self.assertEqual((destination / "file.txt").read_text(), "b")
+
+
+class ScaffoldTestBoundaries(unittest.TestCase):
+    def test_generated_apps_declare_test_paths_that_exclude_implementation(self) -> None:
+        for split in (False, True):
+            with self.subTest(split=split), tempfile.TemporaryDirectory() as temporary:
+                destination = Path(temporary) / "project"
+                command = [sys.executable, str(ROOT / "scripts/new_project.py"), "create",
+                           "acceptance-demo", "--into", str(destination)]
+                if split:
+                    command.append("--split")
+                created = run(command)
+                self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+                for app, test, implementation in (
+                    ("api", "tests/test_health.py", "src/api/main.py"),
+                    ("web", "src/health.test.ts", "src/health.ts"),
+                ):
+                    root = destination / (f"acceptance-demo-{app}" if split else f"apps/{app}")
+                    config = json.loads((root / "harness.config.json").read_text())
+                    self.assertTrue(config.get("tests"), f"{app} has no test boundary")
+                    selected = run(["git", "ls-files", "--", *config["tests"]], cwd=root)
+                    self.assertEqual(selected.returncode, 0, selected.stderr)
+                    files = selected.stdout.splitlines()
+                    self.assertIn(test, files)
+                    self.assertNotIn(implementation, files)
 
 
 if __name__ == "__main__":

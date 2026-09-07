@@ -38,23 +38,21 @@ artifact under test, so a layer A change that breaks the reporter fails the job 
 otherwise have shipped it. Running this checkout's copy instead would prove something about
 a tree no stack will ever execute, and would leave the vendoring adapter itself ungated.
 
-**An unchanged layer A is an honest skip.** Both stacks gate `.agents/vendor/harness/hooks`
-with `.mjs`, so a sync that changes layer A makes the stack's own `gatedChange()` true by
-itself, with no `--base` flag. The converse is the point: on a PR touching only `templates/`,
-`scripts/` or prose, the sync is a no-op, no gate runs, and the job says so and exits 0. That
-sha's own CI already proved it, and re-running both suites would measure the same tree twice.
+**An unchanged layer A is an honest skip.** Before installing, `cross_stack.py`
+compares synced content with the consumer's committed tree, excluding `MANIFEST.json`:
+the manifest records the source SHA and can change without shipped content changing.
+An identical tree costs no install or gate run.
 
-The vacuous-green guard is retargeted rather than dropped: it fails when layer A _did_ move
-and still no gate ran, which can only mean a defect in the stack's own declaration.
+**Changed content requests the declared gates with `--force`.** Shared instructions and
+schemas can change without touching the `.mjs` hook paths watched by a stack's Stop
+hook. The original assumption that every content change satisfied those filters caused
+PR #32 to fail with every gate `skipped_unchanged`. Cross-stack CI now supplies its own
+content-change trigger and delegates eligibility to the reporter: disabled gates remain
+disabled, opt-in gates still require explicit assertion, and probes still apply.
 
-That guard compares two answers to "did layer A move?", and they must be asked in the same
-terms or the guard fires on the difference. `MANIFEST.json` is the trap: it records the
-harness sha the tree was taken at, so a sync rewrites it on every commit here whether or not
-a byte of layer A changed. `cross_stack.py` excludes it; `gate_report.mjs` never saw it,
-because it is outside the stacks' `gatedPaths` and is not a gated extension. Shipping without
-that exclusion failed the job on every harness PR that did not touch layer A, and it was
-invisible until the stacks' pins were current -- until then layer A genuinely had moved every
-time.
+The vacuous-green guard remains: changed content with no executed gate fails. A skipped
+gate is never counted as a passing check. A real sync/reporter regression covers an
+instruction-only change, an unchanged tree, and disabled/opt-in eligibility.
 
 **`incomplete` is kept apart from `fail`.** A gate that could not start does not mean layer A
 broke the stack; it means the job did not find out. Reporting it as a failure would be a red
