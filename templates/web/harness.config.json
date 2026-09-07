@@ -1,5 +1,6 @@
 {
   "name": "__PROJECT__-web",
+  "tests": [":(glob)src/**/*.test.ts", ":(glob)src/**/*.test.tsx"],
   "install": ["pnpm", "install"],
   "dev": {
     "run": ["pnpm", "dev"],

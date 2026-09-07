@@ -80,9 +80,9 @@ def layer_a_moved(stack: Path, exec_=_capture) -> bool:
 
     Asked before the toolchain is installed, so an unchanged layer A costs neither an
     install nor a gate run. This is not a gate-selection decision and must not become one:
-    it asks only whether *this script's own write* moved anything. Whether that constitutes
-    a change the gates care about is `gate_report.mjs`'s judgment, made against the stack's
-    own `gatedPaths`, and it is made again independently below.
+    it asks only whether *this script's own write* moved anything. The reporter still owns
+    gate selection. Once content moves, this caller asks it to
+    run the declared gates independently of the Stop hook's narrower path filters.
 
     **`MANIFEST.json` is excluded, and that exclusion is the whole correctness of this
     function.** The manifest records the harness sha the tree was taken at, so it changes on
@@ -165,7 +165,10 @@ def gate_stack(stack: Path, asserted: list[str]) -> tuple[bool, list[str]]:
     if install and run(install, stack) != 0:
         return False, [f"{name}: `{' '.join(install)}` failed -- no gate could run"]
 
-    argv = ["node", str(stack / GATE_REPORT), "--json", "--cwd", str(stack)]
+    # Instructions and schemas are shipped content too, but normally outside a stack's
+    # Stop-hook filters. Content movement above is our trigger; the reporter remains
+    # responsible for eligibility, disabled gates, probes, and opt-in requirements.
+    argv = ["node", str(stack / GATE_REPORT), "--json", "--force", "--cwd", str(stack)]
     for gate in asserted:
         argv += ["--gate", gate]
     print(f"  gates: {' '.join(argv)}", flush=True)
@@ -221,12 +224,12 @@ def _judge(name: str, report: dict, ran: int) -> list[str]:
         detail = ", ".join(stalled) or f"apps with no config: {', '.join(missing)}"
         return [f"{name}: could not prove layer A -- {detail} never ran"]
     if ran == 0:
-        # Layer A moved, the gates were asked, and none of them executed. Every remaining
-        # explanation is a defect in the stack's own declaration -- a gate list that is
-        # empty, entirely switched off, or whose gatedPaths no longer cover the vendored
-        # tree the sync just rewrote. A pass here would be the vacuous green.
+        # Layer A moved, the gates were asked, and none of them executed.
+        # With the change filter bypassed,
+        # this indicates no eligible gate executed (for example, an empty or entirely
+        # disabled gate list). A pass here would be the vacuous green.
         return [
-            f"{name}: layer A changed but no gate ran -- check gates and hooks.gatedPaths "
+            f"{name}: layer A changed but no gate ran -- check eligible gates "
             f"in {name}/harness.config.json"
         ]
     return []
