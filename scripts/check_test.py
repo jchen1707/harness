@@ -562,5 +562,15 @@ class ScaffoldTestBoundaries(unittest.TestCase):
                     self.assertNotIn(implementation, files)
 
 
+class DelegationContract(unittest.TestCase):
+    def test_child_cannot_supply_authority_or_approval(self) -> None:
+        import config_contract
+        schema = json.loads((ROOT / 'plugins/harness/schema/delegation-request.schema.json').read_text())
+        request = {'task':'Inspect the API tests', 'mode':'read-only', 'paths':['apps/api'], 'role':'test_designer'}
+        self.assertEqual(config_contract.violations(request, schema), [])
+        for override in ({'approved':True}, {'policy_revision':0}, {'parent_invocation':'other'}, {'mode':'native'}, {'task':''}):
+            self.assertTrue(config_contract.violations(request | override, schema), override)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
