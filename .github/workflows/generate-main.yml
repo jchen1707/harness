@@ -23,8 +23,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: generate-main-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   generate:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       # The generated tree is published to `main`, so both refs have to be reachable.
@@ -35,6 +40,7 @@ jobs:
       # non-recursive checkout would let the check skip itself into uselessness.
       - uses: actions/checkout@v4
         with:
+          token: ${{ github.event_name == 'push' && secrets.WORKFLOW_PAT || github.token }}
           fetch-depth: 0
           submodules: recursive
 
@@ -91,7 +97,8 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           source_subject="$(git log -1 --format=%s)"
 
-          git fetch origin main || echo "main does not exist yet"
+          git fetch origin main
+          expected_main="$(git rev-parse origin/main)"
           rm -rf "${RUNNER_TEMP}/publish"
           if git rev-parse --verify origin/main >/dev/null 2>&1; then
             git worktree add --detach "${RUNNER_TEMP}/publish" origin/main
@@ -153,4 +160,4 @@ jobs:
           # be overwritten.
           # Fully qualified: on the very first run `main` does not exist yet, and git
           # refuses to guess a destination ref it cannot already see.
-          git push --force-with-lease origin HEAD:refs/heads/main
+          git push --force-with-lease="refs/heads/main:${expected_main}" origin HEAD:refs/heads/main

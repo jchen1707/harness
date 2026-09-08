@@ -3,16 +3,16 @@
 The stack-neutral half of the agent harnesses, owned once.
 
 This repo is **not an application, and not a harness you work inside**. It is the source of
-layer A — the content that is identical in `python-harness` and `frontend-harness` — plus the
+layer A — the content that is identical in `python-harness`, `frontend-harness` and `go-harness` — plus the
 two adapters that deliver it. Nothing here runs against a product codebase.
 
 ## The rule that decides where a file goes
 
-| Layer                  | What it is                                                                                  | Where it lives                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| **A — stack-neutral**  | Shared review frames, skills, commands, `full-review.js`, `docs/agents/`                    | **Here.** Generated into consumers, never edited there.     |
-| **B — stack-specific** | Gates, hook config, `docs/architecture.md`, path-scoped `AGENTS.md`, each frame's checklist | `python-harness` / `frontend-harness`. Diverges on purpose. |
-| **C — the product**    | An actual application                                                                       | A scaffolded product repo.                                  |
+| Layer                  | What it is                                                                                  | Where it lives                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **A — stack-neutral**  | Shared review frames, skills, commands, `full-review.js`, `docs/agents/`                    | **Here.** Generated into consumers, never edited there.                    |
+| **B — stack-specific** | Gates, hook config, `docs/architecture.md`, path-scoped `AGENTS.md`, each frame's checklist | `python-harness` / `frontend-harness` / `go-harness`. Diverges on purpose. |
+| **C — the product**    | An actual application                                                                       | A scaffolded product repo.                                                 |
 
 If a file states a fact true in only one stack — a team key, a directory layout, a toolchain —
 it is layer B and does not belong here. Split it: the doctrine comes here, the fact stays
@@ -28,10 +28,10 @@ Layer A is authored once under `plugins/harness/` and reaches consumers two ways
 | Codex, and anything else | **Vendored** into `.agents/vendor/harness/` at a pinned sha, committed | Yes, they are ordinary tracked files |
 
 A submodule would be neither. `git worktree add` leaves a submodule directory empty with no
-error, and both consuming repos run worktree-per-ticket — so the shared half would be silently
+error, and all consuming repos run worktree-per-ticket — so the shared half would be silently
 missing in every ticket branch. That measurement is why the plugin exists.
 
-Both stacks _are_ mounted here as submodules, and that is a different thing — see below.
+All stacks _are_ mounted here as submodules, and that is a different thing — see below.
 
 Vendoring's cost is staleness, and the answer is to make staleness loud rather than to avoid
 copies: the pin plus `scripts/vendor_sync.py check` in each consumer's CI reports "N commits
@@ -64,15 +64,16 @@ Two ways a session ends up with none of this, both quiet:
 ```
 python-harness/     ← submodule, tracks the stack's own v2 (main on the main branch)
 frontend-harness/   ← submodule, tracks the stack's own v2 (main on the main branch)
+go-harness/         ← submodule, tracks the stack's own v2 (main on the main branch)
 ```
 
 **Read-only. Work is never committed to a stack through this repo.** Clone the stack
-itself, branch there, open the PR there. Nothing here is a shortcut into either one.
+itself, branch there, open the PR there. Nothing here is a shortcut into any of them.
 
-What the mounting buys is the things neither stack can see from inside itself: onboarding
-that hands somebody both worlds in one clone, cross-stack review, and a CI job that can
-compare the two. The first thing it actually catches is `generate_main.py` — one file kept
-byte-identical in three repos by hand, with nothing until now able to notice a drift.
+What the mounting buys is the things no stack can see from inside itself: onboarding
+that hands somebody all three stacks in one clone, cross-stack review, and a CI job that can
+compare them. The first thing it actually catches is `generate_main.py` — one file kept
+byte-identical in four repos by hand, with nothing until now able to notice a drift.
 `scripts/check.py` compares them.
 
 Set this once, in your clone:
@@ -128,11 +129,12 @@ CONTEXT.md                        ← what the nouns mean
 docs/adr/                         ← decisions a future review should not re-litigate
 python-harness/                   ← submodule, for reading
 frontend-harness/                 ← submodule, for reading
+go-harness/                       ← submodule, for reading
 ```
 
 `templates/` is the one thing here that is neither delivered as a plugin nor vendored.
 A new product repository is copied from it once and owns the result; a stack never
-scaffolds from inside itself, so shipping a React skeleton to both of them would be weight
+scaffolds from inside itself, so shipping a React skeleton to every stack would be weight
 nobody uses and a stale-pin alarm on every edit. `--agnostic` needs a checkout of this repo
 anyway — it runs `vendor_sync.py`, which cannot be vendored either. See `templates/README.md`.
 
@@ -156,11 +158,11 @@ for why that file has the shape it does.
 
 ## What is deliberately still layer B
 
-- **`test-writer`.** Every other reviewer is read-only, so one `tools:` line serves both
+- **`test-writer`.** Every other reviewer is read-only, so one `tools:` line serves all
   stacks. `test-writer` writes, and to be useful it must run the suite it wrote — which
   names a runner in its frontmatter, and a plugin ships one frontmatter. Its doctrine is
   shared at `plugins/harness/docs/agents/testing.md`; the definition stays with the stack.
-- **The ninth review axis.** `async-reviewer` and `a11y-reviewer` are each that stack's
+- **The ninth review axis.** `async-reviewer`, `a11y-reviewer` and `concurrency-reviewer` are each their stack's
   alone. `harness.config.json` names it; `full-review.js` slots it in after `tests`.
 - **What the hooks act on** — gated paths, protected files, formatters, secret variable
   names. The hooks themselves are layer A as of phase 5; what they watch is irreducibly the
@@ -177,15 +179,12 @@ for why that file has the shape it does.
 2. Open a PR here. Merging republishes the plugin for every Claude Code consumer at once —
    which is the point, and also the risk. Pin by sha in a consumer's marketplace entry and
    bump deliberately.
-3. Re-run `vendor_sync.py sync` in each consumer that vendors, and commit the bumped pin.
-   Their CI will tell you if you forget.
-4. **Bump the submodule pins here**, once those merge. This step cannot be folded into step
-   1 — the commits it points at do not exist yet — and it is the one that gets skipped,
-   because nothing downstream of it breaks. `check_submodules.py --current` is what makes
-   the window loud: `meta.yml` runs it on a push to `v2` and not on a pull request, so `v2`
-   goes red between steps 1 and 4 saying the mounting is stale, and clears when the pin
-   lands. `--pins` alone never asked this — it checks only that a pin is _on_ its branch —
-   which is how the mounting once drifted eight vendor syncs deep with every check green.
+3. CI creates or updates one managed vendor-sync PR per stack and enables automatic
+   merge after its required checks pass. Do not edit the managed branches by hand.
+4. CI waits for all stack publications and main CI, then updates the parent pins in one
+   checked PR. `check_submodules.py --current` stays loud while delivery is in progress.
+
+See `docs/sync-automation.md` for the coordinator, credentials, retries and manual recovery.
 
 Structural rules about `harness.config.json` go in the schema, never in `check.py`: the
 schema is what every consumer's editor reads, and `config_contract.py` validates against it

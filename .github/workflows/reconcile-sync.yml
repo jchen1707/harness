@@ -1,0 +1,47 @@
+name: Reconcile harness sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_run:
+    workflows: [Generate main]
+    types: [completed]
+    branches: [v2]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-sync-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Also shipped on main, where GitHub registers schedules and workflow_run.
+      # Execute only trusted, merged v2 code, never a pull request's code.
+      - uses: actions/checkout@v4
+        with:
+          ref: v2
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create GitHub App token when configured
+        if: vars.HARNESS_APP_ID != ''
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.HARNESS_APP_ID }}
+          private-key: ${{ secrets.HARNESS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Reconcile generated updates
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.HARNESS_SYNC_TOKEN }}
+          GH_PROMPT_DISABLED: '1'
+        run: |
+          test -n "$GH_TOKEN" || { echo 'Configure a GitHub App or HARNESS_SYNC_TOKEN'; exit 1; }
+          gh auth setup-git
+          python3 scripts/reconcile_sync.py --apply

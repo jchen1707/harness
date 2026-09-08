@@ -114,5 +114,10 @@ jobs:
         with:
           node-version-file: frontend-harness/.nvmrc
 
-      - name: Layer A on this branch passes both stacks' gates
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-harness/.go-version
+          cache: false
+
+      - name: Layer A on this branch passes all stacks' gates
         run: python3 scripts/cross_stack.py
