@@ -34,3 +34,11 @@ changed evidence in limitations rather than claiming an unperformed verification
 
 The control plane supplies [delegation-child.md](delegation-child.md) to an admitted read-only
 child. That execution contract is separate from these parent delegation instructions.
+
+For isolated-write children, the control plane supplies
+[delegation-child-write.md](delegation-child-write.md). The returned artifact is
+awaiting parent drain: its edits are not yet in your checkout. Do not reimplement,
+cherry-pick, or manually apply that artifact. Finish any disjoint parent work and
+end your turn so the host can integrate safely before ordinary verification and
+independent review. A pending integration is not proof that the combined candidate
+already passed its gates.
