@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/codex_session_learnings.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/codex_session_learnings.mjs\" --claude",
             "timeout": 300,
             "statusMessage": "Distilling session learnings\u2026"
           }

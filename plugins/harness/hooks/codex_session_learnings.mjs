@@ -51,6 +51,8 @@ logOutcome(
   `queued: session ${String(payload.session_id ?? 'unknown').replace(/[^a-zA-Z0-9-]/g, '')}`,
 );
 
+payload.runtime = process.argv.includes('--claude') ? 'claude' : 'codex';
+
 const script = join(dirname(fileURLToPath(import.meta.url)), 'session_learnings.mjs');
 
 try {

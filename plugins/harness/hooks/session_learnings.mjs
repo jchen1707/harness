@@ -78,7 +78,6 @@ import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   mkdirSync,
-  statSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -466,7 +465,7 @@ export function splitSummary(text) {
  * failure means the session taught nothing; a non-null failure names what broke, so the log
  * can tell the two apart.
  */
-export function distil(transcript, context, prior = '') {
+export function distil(transcript, context, prior = '', runtime = '') {
   const earlier = prior.trim() ? `\n\n${PRIOR_NOTE_HEADER}\n${prior.trim()}` : '';
   const payload = `${PROMPT}\n\n=== GIT CONTEXT ===\n${context}${earlier}\n\n=== TRANSCRIPT ===\n${transcript}`;
 
@@ -481,7 +480,7 @@ export function distil(transcript, context, prior = '') {
     home = undefined;
   }
 
-  const backend = process.env.LEARNINGS_DISTILLER ?? 'claude';
+  const backend = process.env.LEARNINGS_DISTILLER ?? (runtime === 'codex' ? 'codex' : 'claude');
   if (!['claude', 'codex'].includes(backend))
     return { text: '', failure: 'unknown LEARNINGS_DISTILLER (expected claude or codex)' };
   const args =
@@ -614,22 +613,41 @@ export function distilTranscript(options) {
     try {
       mkdirSync(lock);
     } catch {
-      let stale = false;
+      // Only one reclaimer may inspect and replace a dead owner's directory. Re-read the
+      // owner after taking this guard: a verdict made before it could refer to an old lock.
+      const reclaim = `${lock}.reclaim`;
       try {
-        const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
-        if (owner.host === hostname()) {
-          try {
-            process.kill(owner.pid, 0);
-          } catch (error) {
-            stale = error.code === 'ESRCH';
-          }
-        } else stale = Date.now() - statSync(lock).mtimeMs > DISTILL_TIMEOUT * 3;
+        mkdirSync(reclaim);
       } catch {
-        stale = Date.now() - statSync(lock).mtimeMs > DISTILL_TIMEOUT * 3;
+        return { target: '', outcome: 'failed: session capture recovery already running' };
       }
-      if (!stale) return { target: '', outcome: 'failed: session capture already running' };
-      rmSync(lock, { recursive: true });
-      mkdirSync(lock);
+      try {
+        let owner;
+        try {
+          owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+        } catch {
+          return {
+            target: '',
+            outcome: 'failed: capture lock owner unavailable; inspect lock before recovery',
+          };
+        }
+        if (owner.host !== hostname())
+          return {
+            target: '',
+            outcome: 'failed: capture lock belongs to another host; inspect owner before recovery',
+          };
+        let dead = false;
+        try {
+          process.kill(owner.pid, 0);
+        } catch (error) {
+          dead = error.code === 'ESRCH';
+        }
+        if (!dead) return { target: '', outcome: 'failed: session capture already running' };
+        rmSync(lock, { recursive: true });
+        mkdirSync(lock);
+      } finally {
+        rmSync(reclaim, { recursive: true, force: true });
+      }
     }
     writeFileSync(join(lock, 'owner.json'), JSON.stringify({ host: hostname(), pid: process.pid }));
   } catch {
@@ -650,7 +668,7 @@ export function distilTranscript(options) {
   }
 }
 
-function distilUnlocked({ transcriptPath, sessionId, cwd, directory, project: identity }) {
+function distilUnlocked({ transcriptPath, sessionId, cwd, directory, project: identity, runtime }) {
   let raw;
   try {
     raw = readFileSync(transcriptPath, 'utf8');
@@ -681,6 +699,7 @@ function distilUnlocked({ transcriptPath, sessionId, cwd, directory, project: id
     transcript,
     gitContext(cwd),
     priorBody(notes, sessionId),
+    runtime,
   );
   if (failure) return { target: '', outcome: `failed: ${failure}` };
   if (!distilled) return { target: '', outcome: 'no learnings: the session taught nothing' };
@@ -757,6 +776,7 @@ export async function capture(payload, environment = process.env) {
     directory,
     project: payload.project,
     evidence: payload.evidence,
+    runtime: payload.runtime,
   });
   // Refresh after writing: the new note must be visible immediately in both indexes.
   const projectIndex = rebuildIndex(directory);

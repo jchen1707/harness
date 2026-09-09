@@ -9,15 +9,15 @@ of the runtime or host capture worker. The shell, an interactive agent's environ
 factory sandbox can have different settings. An unset shell variable does not establish
 that an interactive agent is unconfigured. Never commit a personal vault path.
 
-`LEARNINGS_DISTILLER=claude` is the default. It needs working host Claude authentication;
-`CLAUDE_LEARNINGS_MODEL` defaults to `sonnet`. Set `LEARNINGS_DISTILLER=codex` explicitly to
-use existing host Codex authentication instead; `CODEX_LEARNINGS_MODEL` optionally chooses
+Capture defaults to the originating runtime: Codex sessions use Codex, Claude sessions use
+Claude. A direct CLI call without `runtime` metadata uses Claude. It needs working host Claude authentication;
+`CLAUDE_LEARNINGS_MODEL` defaults to `sonnet`. Set `LEARNINGS_DISTILLER=codex` or `claude` to override that choice explicitly; `CODEX_LEARNINGS_MODEL` optionally chooses
 its model. A failed backend is reported, never silently replaced. Codex distillation uses
 a neutral directory, ephemeral session, disabled hooks and shell tool, disabled web search,
 and a read-only sandbox. Neither backend receives a factory sandbox credential.
 
 SessionEnd invokes `codex_session_learnings.mjs`, the shared detached adapter for either
-runtime. It returns immediately. `_hook.log` records queued, started and terminal outcomes
+runtime. Claude invokes the adapter with `--claude`; Codex uses its default. It returns immediately. `_hook.log` records queued, started and terminal outcomes
 when the vault is writable. A queued/started entry without a terminal entry is an incomplete
 attempt, not proof of no learnings. Missing configuration is reported on stderr; a missing
 log can also mean logging failed. `CLAUDE_LEARNINGS_OFF=1` disables capture.
@@ -28,12 +28,15 @@ For one explicitly selected retained transcript, a host can invoke:
 node <harness-root>/hooks/session_learnings.mjs --json < capture-payload.json
 ```
 
-The JSON payload has `cwd`, `session_id` and `transcript_path`. The optional `project` is a
+The JSON payload has `cwd`, `session_id`, `transcript_path` and optionally `runtime` (`codex` or `claude`). The optional `project` is a
 safe filename identity override; normally omit it so the remote repository name, or Git
 common directory, resolves the same identity in different worktrees and clones. The result
 contains `target`, `outcome` and `retryable`. Success updates both indexes after writing the
 note; indexing failure is a retryable partial result. Session identity preserves existing
-note names. Atomic replacement protects an earlier note from interruption during writing.
+note names. Atomic replacement protects an earlier note from interruption during writing. A session lock
+serializes capture and refuses a live owner. A dead process on the same host can be recovered;
+a foreign or missing owner requires inspection before manual lock recovery. A partial
+factory source never overwrites an existing note from that session.
 
 Clean completion and interruption differ: killing a runtime can skip SessionEnd. Retain the
 transcript before cleanup and explicitly replay that one source. The existing backlog tool
