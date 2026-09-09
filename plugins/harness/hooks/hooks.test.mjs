@@ -2180,3 +2180,7 @@ describe('gate report — --kinds narrows the run', () => {
     assert.deepEqual(parseArgs([]).kinds, []);
   });
 });
+
+// Keep the consumer-facing test entry point inclusive of learning regression suites.
+import './learning_repair.test.mjs';
+import './learning_recall.test.mjs';

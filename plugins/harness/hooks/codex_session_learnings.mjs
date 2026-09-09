@@ -27,7 +27,8 @@ import { vaultDir } from './vault_index.mjs';
 
 const payload = await readPayload();
 if (payload === null) process.exit(0);
-if (process.env.CLAUDE_LEARNINGS_OFF === '1' || process.env.CLAUDE_LEARNINGS_SKIP === '1') process.exit(0);
+if (process.env.CLAUDE_LEARNINGS_OFF === '1' || process.env.CLAUDE_LEARNINGS_SKIP === '1')
+  process.exit(0);
 const directory = learningsDirectory();
 if (!directory) {
   process.stderr.write('session_learnings: unavailable: OBSIDIAN_VAULT_DIRECTORY not configured\n');
@@ -38,11 +39,17 @@ if (!vaultDir()) {
   process.exit(0);
 }
 const project = canonicalProject(payload.cwd || process.cwd());
-try { mkdirSync(directory, { recursive: true }); } catch {
+try {
+  mkdirSync(directory, { recursive: true });
+} catch {
   process.stderr.write('session_learnings: failed: learnings directory unavailable\n');
   process.exit(0);
 }
-logOutcome(directory, project, `queued: session ${String(payload.session_id ?? 'unknown').replace(/[^a-zA-Z0-9-]/g, '')}`);
+logOutcome(
+  directory,
+  project,
+  `queued: session ${String(payload.session_id ?? 'unknown').replace(/[^a-zA-Z0-9-]/g, '')}`,
+);
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'session_learnings.mjs');
 
@@ -52,7 +59,10 @@ try {
     stdio: ['pipe', 'ignore', 'ignore'],
     windowsHide: true,
   });
-  child.on('error', () => { logOutcome(directory, project, 'failed: capture worker could not start'); process.exit(0); });
+  child.on('error', () => {
+    logOutcome(directory, project, 'failed: capture worker could not start');
+    process.exit(0);
+  });
   child.stdin.on('error', () => {}); // A child that died before reading is not our problem.
   child.stdin.end(JSON.stringify(payload));
   child.unref();

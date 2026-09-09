@@ -13,8 +13,8 @@
  *
  * **Every run appends one outcome line to `_hook.log`** beside the notes. SessionEnd stderr
  * is invisible, so before the log a failed distillation looked identical to a session that
- * taught nothing. Diagnosis: no line for a session means SessionEnd never fired — a closed
- * terminal window skips it; a `failed:` line names the reason.
+ * taught nothing. No line means no recorded outcome, which also includes log-write failure; a closed
+ * terminal window can skip it; a `failed:` line names the reason.
  *
  * **It writes notes and it indexes them.** Until phase 5 those were two repos' jobs: the
  * frontend harness wrote notes and `python-harness` owned both indexes, so a note written
@@ -32,7 +32,9 @@
  * | --- | --- |
  * | `OBSIDIAN_VAULT_DIRECTORY` | Vault root. Notes go in `Project Learnings`. |
  * | `CLAUDE_LEARNINGS_OFF=1` | Disable without unsetting the directory. |
- * | `CLAUDE_LEARNINGS_MODEL` | Model for the distillation. Default `sonnet`. |
+ * | `CLAUDE_LEARNINGS_MODEL` | Claude model for distillation. Default `sonnet`. |
+ * | `LEARNINGS_DISTILLER` | Explicit backend, `claude` (default) or `codex`. No silent fallback. |
+ * | `CODEX_LEARNINGS_MODEL` | Optional model override for the Codex backend. |
  * | `CLAUDE_LEARNINGS_SKIP=1` | Recursion guard; set on the child, never set by hand. |
  *
  * **Two recursion guards, because one is not enough.** The `claude -p` we spawn is a full
@@ -71,16 +73,19 @@
  * reason to interfere with ending a session.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   mkdirSync,
+  statSync,
   readFileSync,
+  renameSync,
+  rmSync,
   readdirSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -224,10 +229,17 @@ export function logOutcome(directory, project, outcome) {
 export function canonicalProject(cwd) {
   const origin = output('git', ['remote', 'get-url', 'origin'], { cwd }).trim();
   if (origin) {
-    const name = origin.replace(/[?#].*$/, '').replace(/\/$/, '').split(/[/:]/).at(-1).replace(/\.git$/, '');
+    const name = origin
+      .replace(/[?#].*$/, '')
+      .replace(/\/$/, '')
+      .split(/[/:]/)
+      .at(-1)
+      .replace(/\.git$/, '');
     if (/^[a-zA-Z0-9._-]+$/.test(name)) return name;
   }
-  const common = output('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd }).trim();
+  const common = output('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd,
+  }).trim();
   return basename(common ? dirname(common) : cwd) || 'session';
 }
 
@@ -389,7 +401,10 @@ export function readNotes(directory) {
 export function existingNote(notes, sessionId) {
   if (!sessionId) return undefined;
   const key = shortId(sessionId);
-  return notes.find((note) => note.session === sessionId) ?? notes.find((note) => !note.session && note.key === key);
+  return (
+    notes.find((note) => note.session === sessionId) ??
+    notes.find((note) => !note.session && note.key === key)
+  );
 }
 
 /**
@@ -424,7 +439,11 @@ export function placeNote(notes, body, sessionId, fallbackPath) {
   }
   const collision = notes.some((note) => note.path === fallbackPath);
   const suffix = createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
-  return { target: collision ? fallbackPath.replace(/\.md$/, `-${suffix}.md`) : fallbackPath, date: '', skip: null };
+  return {
+    target: collision ? fallbackPath.replace(/\.md$/, `-${suffix}.md`) : fallbackPath,
+    date: '',
+    skip: null,
+  };
 }
 
 /** Dated, project-scoped, session-suffixed so two sessions a day cannot collide. */
@@ -462,7 +481,34 @@ export function distil(transcript, context, prior = '') {
     home = undefined;
   }
 
-  const result = spawnSync('claude', ['-p', '--model', MODEL], {
+  const backend = process.env.LEARNINGS_DISTILLER ?? 'claude';
+  if (!['claude', 'codex'].includes(backend))
+    return { text: '', failure: 'unknown LEARNINGS_DISTILLER (expected claude or codex)' };
+  const args =
+    backend === 'claude'
+      ? ['-p', '--model', MODEL]
+      : [
+          'exec',
+          '--ignore-user-config',
+          '--ignore-rules',
+          '--skip-git-repo-check',
+          '--ephemeral',
+          '--sandbox',
+          'read-only',
+          '--disable',
+          'shell_tool',
+          '--disable',
+          'hooks',
+          '-c',
+          'web_search="disabled"',
+          '-c',
+          'model_reasoning_effort="low"',
+          ...(process.env.CODEX_LEARNINGS_MODEL
+            ? ['--model', process.env.CODEX_LEARNINGS_MODEL]
+            : []),
+          '-',
+        ];
+  const result = spawnSync(backend, args, {
     input: payload,
     cwd: home,
     // Explicit, not the default Buffer: decoding with the locale codec (cp1252 on Windows)
@@ -474,8 +520,9 @@ export function distil(transcript, context, prior = '') {
     env: { ...process.env, CLAUDE_LEARNINGS_SKIP: '1' },
   });
 
-  if (result.error) return { text: '', failure: `could not run claude (${result.error.message})` };
-  if (result.status !== 0) return { text: '', failure: `claude exited ${result.status}` };
+  if (result.error)
+    return { text: '', failure: `could not run ${backend} (${result.error.message})` };
+  if (result.status !== 0) return { text: '', failure: `${backend} exited ${result.status}` };
   const text = (result.stdout ?? '').trim();
   if (!text) return { text: '', failure: 'distiller returned empty output' };
   if (text.startsWith(NO_LEARNINGS)) return { text: '', failure: null };
@@ -540,7 +587,7 @@ export function rebuildIndex(directory) {
 
   const target = join(directory, INDEX_NAME);
   try {
-    writeFileSync(target, `${lines.join('\n')}\n`, 'utf8');
+    vaultIndex.writeAtomic(target, `${lines.join('\n')}\n`);
   } catch (error) {
     process.stderr.write(`session_learnings: could not write index (${error.message})\n`);
     return '';
@@ -555,10 +602,61 @@ export function rebuildIndex(directory) {
  * Shared by the SessionEnd path and the recovery path in `distil_backlog.mjs`, so the two
  * cannot drift on what a note is.
  */
-export function distilTranscript({ transcriptPath, sessionId, cwd, directory, project: identity }) {
+export function distilTranscript(options) {
+  const { directory, sessionId, evidence } = options;
+  if (!sessionId) return { target: '', outcome: 'failed: session identity missing' };
+  const lock = join(
+    directory,
+    `._capture-${createHash('sha256').update(sessionId).digest('hex')}.lock`,
+  );
+  try {
+    mkdirSync(directory, { recursive: true });
+    try {
+      mkdirSync(lock);
+    } catch {
+      let stale = false;
+      try {
+        const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+        if (owner.host === hostname()) {
+          try {
+            process.kill(owner.pid, 0);
+          } catch (error) {
+            stale = error.code === 'ESRCH';
+          }
+        } else stale = Date.now() - statSync(lock).mtimeMs > DISTILL_TIMEOUT * 3;
+      } catch {
+        stale = Date.now() - statSync(lock).mtimeMs > DISTILL_TIMEOUT * 3;
+      }
+      if (!stale) return { target: '', outcome: 'failed: session capture already running' };
+      rmSync(lock, { recursive: true });
+      mkdirSync(lock);
+    }
+    writeFileSync(join(lock, 'owner.json'), JSON.stringify({ host: hostname(), pid: process.pid }));
+  } catch {
+    return { target: '', outcome: 'failed: capture lock unavailable' };
+  }
+  try {
+    // A sparse factory export cannot improve a note already distilled from a richer source.
+    if (evidence === 'retained-events-partial' && existingNote(readNotes(directory), sessionId)) {
+      return { target: '', outcome: 'skipped: existing note retained for partial evidence' };
+    }
+    return distilUnlocked(options);
+  } finally {
+    try {
+      rmSync(lock, { recursive: true, force: true });
+    } catch {
+      /* logged on next attempt */
+    }
+  }
+}
+
+function distilUnlocked({ transcriptPath, sessionId, cwd, directory, project: identity }) {
   let raw;
-  try { raw = readFileSync(transcriptPath, 'utf8'); }
-  catch { return { target: '', outcome: 'failed: transcript unavailable' }; }
+  try {
+    raw = readFileSync(transcriptPath, 'utf8');
+  } catch {
+    return { target: '', outcome: 'failed: transcript unavailable' };
+  }
   if (!sessionId) return { target: '', outcome: 'failed: session identity missing' };
 
   // The propagation-free guard: this one survives an environment that did not reach the
@@ -576,7 +674,8 @@ export function distilTranscript({ transcriptPath, sessionId, cwd, directory, pr
   // note back, and the earlier note only exists in the vault.
   const notes = readNotes(directory);
   const project = identity || canonicalProject(cwd);
-  if (!/^[a-zA-Z0-9._-]+$/.test(project)) return { target: '', outcome: 'failed: invalid project identity' };
+  if (!/^[a-zA-Z0-9._-]+$/.test(project))
+    return { target: '', outcome: 'failed: invalid project identity' };
 
   const { text: distilled, failure } = distil(
     transcript,
@@ -612,10 +711,17 @@ export function distilTranscript({ transcriptPath, sessionId, cwd, directory, pr
     '---\n\n' +
     `# ${project} — session learnings (${first})\n\n`;
 
+  const temporary = `${target}.${randomUUID()}.tmp`;
   try {
     mkdirSync(directory, { recursive: true });
-    writeFileSync(target, `${front}${body}\n`, 'utf8');
+    writeFileSync(temporary, `${front}${body}\n`, { encoding: 'utf8', mode: 0o600 });
+    renameSync(temporary, target);
   } catch (error) {
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      /* retain original note */
+    }
     return { target: '', outcome: `failed: could not write note (${error.message})` };
   }
   return { target, outcome: `${date ? 'rewrote' : 'wrote'} ${basename(target)}` };
@@ -623,15 +729,21 @@ export function distilTranscript({ transcriptPath, sessionId, cwd, directory, pr
 
 /** Explicit host entry point as well as the interactive hook. Failures never block exit. */
 export async function capture(payload, environment = process.env) {
-  if (environment.CLAUDE_LEARNINGS_OFF === '1') return { target: '', outcome: 'disabled: capture switched off' };
+  if (environment.CLAUDE_LEARNINGS_OFF === '1')
+    return { target: '', outcome: 'disabled: capture switched off' };
   const directory = learningsDirectory(environment);
-  if (!directory) return { target: '', outcome: 'unavailable: OBSIDIAN_VAULT_DIRECTORY not configured' };
-  if (!vaultIndex.vaultDir(environment)) return { target: '', outcome: 'failed: configured vault unavailable' };
+  if (!directory)
+    return { target: '', outcome: 'unavailable: OBSIDIAN_VAULT_DIRECTORY not configured' };
+  if (!vaultIndex.vaultDir(environment))
+    return { target: '', outcome: 'failed: configured vault unavailable' };
   if (!payload) return { target: '', outcome: 'failed: hook payload unavailable' };
   const cwd = payload.cwd || process.cwd();
   const project = canonicalProject(cwd);
-  try { mkdirSync(directory, { recursive: true }); }
-  catch { return { target: '', outcome: 'failed: learnings directory unavailable' }; }
+  try {
+    mkdirSync(directory, { recursive: true });
+  } catch {
+    return { target: '', outcome: 'failed: learnings directory unavailable' };
+  }
   if (environment.CLAUDE_LEARNINGS_SKIP === '1') {
     const result = { target: '', outcome: 'skipped: distiller session (env guard)' };
     logOutcome(directory, project, result.outcome);
@@ -639,21 +751,29 @@ export async function capture(payload, environment = process.env) {
   }
   logOutcome(directory, project, `started: session ${shortId(payload.session_id)}`);
   const result = distilTranscript({
-    transcriptPath: payload.transcript_path ?? '', sessionId: String(payload.session_id ?? ''),
-    cwd, directory, project: payload.project,
+    transcriptPath: payload.transcript_path ?? '',
+    sessionId: String(payload.session_id ?? ''),
+    cwd,
+    directory,
+    project: payload.project,
+    evidence: payload.evidence,
   });
   // Refresh after writing: the new note must be visible immediately in both indexes.
-  if (result.target || result.outcome.startsWith('skipped: unchanged')) {
-    if (!rebuildIndex(directory) || !vaultIndex.refresh()) result.outcome += '; failed: indexing unavailable';
-  }
+  const projectIndex = rebuildIndex(directory);
+  const wholeIndex = vaultIndex.refresh(environment);
+  if (!projectIndex || !wholeIndex) result.outcome += '; failed: indexing unavailable';
   logOutcome(directory, project, result.outcome);
   return result;
 }
 
 async function main() {
   let result;
-  try { result = await capture(await readPayload()); }
-  catch { result = { target: '', outcome: 'failed: unexpected capture error' }; }
+  try {
+    result = await capture(await readPayload());
+  } catch {
+    result = { target: '', outcome: 'failed: unexpected capture error' };
+  }
+  result.retryable = /(?:failed:|unavailable:|disabled:)/.test(result.outcome);
   if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify(result)}\n`);
   else process.stderr.write(`session_learnings: ${result.outcome}\n`);
   return 0;
