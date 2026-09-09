@@ -1,0 +1,82 @@
+[
+  {
+    "stage": "initial-excerpt-failure",
+    "exit": 0,
+    "answers": [
+      "The provided learning context does not describe zebra-reconcile-83\u2019s rollback or its verification marker. The recalled text contains only \u201cFixture only\u201d and repeated background text, so neither detail can be determined without guessing.\n\nSource: `Project Learnings/lesson.md`."
+    ],
+    "events": [
+      {
+        "event": "SessionStart",
+        "recall": {
+          "status": "project_index",
+          "project": "fixture-project",
+          "index": [
+            {
+              "path": "Project Learnings/lesson.md",
+              "summary": "queue delivery recovery"
+            }
+          ],
+          "notes": [],
+          "warnings": []
+        }
+      },
+      {
+        "event": "UserPromptSubmit",
+        "recall": {
+          "status": "recalled",
+          "project": "fixture-project",
+          "index": [],
+          "notes": [
+            {
+              "path": "Project Learnings/lesson.md",
+              "text": "Fixture only. background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background background backg"
+            }
+          ],
+          "warnings": [],
+          "search": "body_fallback"
+        }
+      }
+    ]
+  },
+  {
+    "stage": "repaired",
+    "exit": 0,
+    "answers": [
+      "The `zebra-reconcile-83` rollback is to **persist intent before the external call**. Its verification marker is `BODY_FALLBACK_OTTER_47`.\n\nSource: [Project Learnings/lesson.md](<Project Learnings/lesson.md>)."
+    ],
+    "events": [
+      {
+        "event": "SessionStart",
+        "recall": {
+          "status": "project_index",
+          "project": "fixture-project",
+          "index": [
+            {
+              "path": "Project Learnings/lesson.md",
+              "summary": "queue delivery recovery"
+            }
+          ],
+          "notes": [],
+          "warnings": []
+        }
+      },
+      {
+        "event": "UserPromptSubmit",
+        "recall": {
+          "status": "recalled",
+          "project": "fixture-project",
+          "index": [],
+          "notes": [
+            {
+              "path": "Project Learnings/lesson.md",
+              "text": "nd background background background background background background background background background background background background background background background background background background background background background background background background background background background zebra-reconcile-83 rollback: persist intent before external call; verification marker BODY_FALLBACK_OTTER_47."
+            }
+          ],
+          "warnings": [],
+          "search": "body_fallback"
+        }
+      }
+    ]
+  }
+]
