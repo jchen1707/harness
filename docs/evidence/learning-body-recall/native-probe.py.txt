@@ -1,0 +1,21 @@
+import pathlib,tempfile,json,subprocess,os,importlib.util
+root=pathlib.Path(tempfile.mkdtemp(prefix='harness-body-native-'));repo=root/'repo';repo.mkdir();vault=root/'vault';notes=vault/'Project Learnings';notes.mkdir(parents=True)
+for args in [['init','-q'],['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','fixture'],['remote','add','origin','https://example.invalid/acme/fixture-project.git'],['worktree','add','-qb','later',str(root/'later')]]:subprocess.run(['git','-C',str(repo),*args],check=True)
+(notes/'lesson.md').write_text('Fixture only. '+('background '*500)+'zebra-reconcile-83 rollback: persist intent before external call; verification marker BODY_FALLBACK_OTTER_47.')
+(notes/'unrelated.md').write_text('UNRELATED_CONTEXT_SHOULD_NOT_APPEAR')
+(notes/'_INDEX.md').write_text('| 2026-09-09 | fixture-project | queue delivery recovery | [[lesson]] |\n| 2026-09-09 | other | typography | [[unrelated]] |\n');(vault/'_VAULT_INDEX.md').write_text('')
+hook=str(pathlib.Path(os.environ['HARNESS_ROOT'])/'plugins/harness/hooks/learning_recall.mjs')
+wrapper=root/'hook.py';wrapper.write_text('import sys,subprocess,json\np=sys.stdin.read()\nr=subprocess.run(["node",'+repr(hook)+'],input=p,text=True,capture_output=True)\nwith open('+repr(str(root/'recall.jsonl'))+',"a") as f:f.write(json.dumps({"input":json.loads(p),"output":r.stdout})+"\\n")\nprint(r.stdout,end="")\n')
+hooks={e:[{'hooks':[{'type':'command','command':f'python3 {wrapper}','timeout':3}]}] for e in ['SessionStart','UserPromptSubmit']}
+spec=importlib.util.spec_from_file_location('worker',str(pathlib.Path(os.environ['FACTORY_ROOT'])/'src/factory/agent/app_server_worker.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+env=dict(os.environ,OBSIDIAN_VAULT_DIRECTORY=str(vault),CLAUDE_LEARNINGS_OFF='1')
+cmd=['codex','exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--dangerously-bypass-hook-trust','--enable','hooks','-c','hooks='+m.toml_literal(hooks),'-C',str(root/'later'),'--sandbox','read-only','--json','Using only provided learning context, describe zebra-reconcile-83 rollback and its verification marker. Cite the note. Do not use tools or guess.']
+print(root,flush=True)
+r=subprocess.run(cmd,env=env,text=True,capture_output=True,timeout=120);(root/'stdout.jsonl').write_text(r.stdout);(root/'stderr.log').write_text(r.stderr)
+answers=[]
+for line in r.stdout.splitlines():
+ try:
+  event=json.loads(line)
+  if event.get('item',{}).get('type')=='agent_message':answers.append(event['item']['text'])
+ except ValueError:pass
+result={'exit':r.returncode,'answers':answers,'hooks':[json.loads(x) for x in (root/'recall.jsonl').read_text().splitlines()]};(root/'results.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
