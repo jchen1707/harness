@@ -71,17 +71,17 @@
  * reason to interfere with ending a session.
  */
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   mkdirSync,
   readFileSync,
   readdirSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -220,6 +220,17 @@ export function logOutcome(directory, project, outcome) {
   }
 }
 
+/** Stable across worktrees and clones; never retain credentials from a remote URL. */
+export function canonicalProject(cwd) {
+  const origin = output('git', ['remote', 'get-url', 'origin'], { cwd }).trim();
+  if (origin) {
+    const name = origin.replace(/[?#].*$/, '').replace(/\/$/, '').split(/[/:]/).at(-1).replace(/\.git$/, '');
+    if (/^[a-zA-Z0-9._-]+$/.test(name)) return name;
+  }
+  const common = output('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd }).trim();
+  return basename(common ? dirname(common) : cwd) || 'session';
+}
+
 /** Branch, recent commits and dirty files — the facts a model should not have to infer. */
 export function gitContext(cwd) {
   const branch = output('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd }) || '(unknown)';
@@ -249,7 +260,14 @@ function extractText(block) {
 function messageOf(entry) {
   if (entry?.message && typeof entry.message === 'object') return entry.message;
   const payload = entry?.payload;
-  return payload && typeof payload === 'object' && 'role' in payload ? payload : null;
+  if (payload && typeof payload === 'object' && 'role' in payload) return payload;
+  if (entry?.type === 'item.completed' && entry.item?.type === 'agent_message') {
+    return { role: 'assistant', content: entry.item.text };
+  }
+  if (entry?.type === 'item.completed' && entry.item?.type === 'command_execution') {
+    return { role: 'tool', content: entry.item.aggregated_output };
+  }
+  return null;
 }
 
 /** The transcript file as written, or `''` when it cannot be read. */
@@ -371,7 +389,7 @@ export function readNotes(directory) {
 export function existingNote(notes, sessionId) {
   if (!sessionId) return undefined;
   const key = shortId(sessionId);
-  return notes.find((note) => note.key === key);
+  return notes.find((note) => note.session === sessionId) ?? notes.find((note) => !note.session && note.key === key);
 }
 
 /**
@@ -404,7 +422,9 @@ export function placeNote(notes, body, sessionId, fallbackPath) {
   if (twin) {
     return { target: twin.path, date: twin.date, skip: `duplicate of ${basename(twin.path)}` };
   }
-  return { target: fallbackPath, date: '', skip: null };
+  const collision = notes.some((note) => note.path === fallbackPath);
+  const suffix = createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+  return { target: collision ? fallbackPath.replace(/\.md$/, `-${suffix}.md`) : fallbackPath, date: '', skip: null };
 }
 
 /** Dated, project-scoped, session-suffixed so two sessions a day cannot collide. */
@@ -535,8 +555,11 @@ export function rebuildIndex(directory) {
  * Shared by the SessionEnd path and the recovery path in `distil_backlog.mjs`, so the two
  * cannot drift on what a note is.
  */
-export function distilTranscript({ transcriptPath, sessionId, cwd, directory }) {
-  const raw = readRaw(transcriptPath);
+export function distilTranscript({ transcriptPath, sessionId, cwd, directory, project: identity }) {
+  let raw;
+  try { raw = readFileSync(transcriptPath, 'utf8'); }
+  catch { return { target: '', outcome: 'failed: transcript unavailable' }; }
+  if (!sessionId) return { target: '', outcome: 'failed: session identity missing' };
 
   // The propagation-free guard: this one survives an environment that did not reach the
   // child, which is the failure that filled a vault with near-copies.
@@ -552,7 +575,8 @@ export function distilTranscript({ transcriptPath, sessionId, cwd, directory }) 
   // Read the vault before the distiller runs, not after: a rewrite has to send the earlier
   // note back, and the earlier note only exists in the vault.
   const notes = readNotes(directory);
-  const project = basename(cwd) || 'session';
+  const project = identity || canonicalProject(cwd);
+  if (!/^[a-zA-Z0-9._-]+$/.test(project)) return { target: '', outcome: 'failed: invalid project identity' };
 
   const { text: distilled, failure } = distil(
     transcript,
@@ -589,6 +613,7 @@ export function distilTranscript({ transcriptPath, sessionId, cwd, directory }) 
     `# ${project} — session learnings (${first})\n\n`;
 
   try {
+    mkdirSync(directory, { recursive: true });
     writeFileSync(target, `${front}${body}\n`, 'utf8');
   } catch (error) {
     return { target: '', outcome: `failed: could not write note (${error.message})` };
@@ -596,48 +621,41 @@ export function distilTranscript({ transcriptPath, sessionId, cwd, directory }) 
   return { target, outcome: `${date ? 'rewrote' : 'wrote'} ${basename(target)}` };
 }
 
-async function main() {
-  if (process.env.CLAUDE_LEARNINGS_OFF === '1') return 0;
-
-  const directory = learningsDirectory();
-  if (!directory) return 0; // Not configured -> not this clone's business.
-
-  const payload = await readPayload();
-  if (!payload) return 0;
-
+/** Explicit host entry point as well as the interactive hook. Failures never block exit. */
+export async function capture(payload, environment = process.env) {
+  if (environment.CLAUDE_LEARNINGS_OFF === '1') return { target: '', outcome: 'disabled: capture switched off' };
+  const directory = learningsDirectory(environment);
+  if (!directory) return { target: '', outcome: 'unavailable: OBSIDIAN_VAULT_DIRECTORY not configured' };
+  if (!vaultIndex.vaultDir(environment)) return { target: '', outcome: 'failed: configured vault unavailable' };
+  if (!payload) return { target: '', outcome: 'failed: hook payload unavailable' };
   const cwd = payload.cwd || process.cwd();
-  const project = basename(cwd) || 'session';
-
-  // Guard one: the environment variable we set on the child. Logged rather than silent,
-  // because a missing line beside a distillation run is how a leaking guard shows itself.
-  if (process.env.CLAUDE_LEARNINGS_SKIP === '1') {
-    logOutcome(directory, project, 'skipped: distiller session (env guard)');
-    return 0;
+  const project = canonicalProject(cwd);
+  try { mkdirSync(directory, { recursive: true }); }
+  catch { return { target: '', outcome: 'failed: learnings directory unavailable' }; }
+  if (environment.CLAUDE_LEARNINGS_SKIP === '1') {
+    const result = { target: '', outcome: 'skipped: distiller session (env guard)' };
+    logOutcome(directory, project, result.outcome);
+    return result;
   }
-
-  // Unconditional, and before every early return below: the vault gains hand-written notes
-  // between sessions, and those need indexing even when this session distilled nothing.
-  vaultIndex.refresh();
-
-  try {
-    if (!statSync(directory).isDirectory()) throw new Error('not a directory');
-  } catch {
-    process.stderr.write(`session_learnings: ${directory} is not a directory\n`);
-    return 0;
-  }
-
-  const { target, outcome } = distilTranscript({
-    transcriptPath: payload.transcript_path ?? '',
-    sessionId: String(payload.session_id ?? ''),
-    cwd,
-    directory,
+  logOutcome(directory, project, `started: session ${shortId(payload.session_id)}`);
+  const result = distilTranscript({
+    transcriptPath: payload.transcript_path ?? '', sessionId: String(payload.session_id ?? ''),
+    cwd, directory, project: payload.project,
   });
+  // Refresh after writing: the new note must be visible immediately in both indexes.
+  if (result.target || result.outcome.startsWith('skipped: unchanged')) {
+    if (!rebuildIndex(directory) || !vaultIndex.refresh()) result.outcome += '; failed: indexing unavailable';
+  }
+  logOutcome(directory, project, result.outcome);
+  return result;
+}
 
-  logOutcome(directory, project, outcome);
-  if (!target) return 0;
-
-  rebuildIndex(directory);
-  process.stderr.write(`session_learnings: ${outcome}\n`);
+async function main() {
+  let result;
+  try { result = await capture(await readPayload()); }
+  catch { result = { target: '', outcome: 'failed: unexpected capture error' }; }
+  if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify(result)}\n`);
+  else process.stderr.write(`session_learnings: ${result.outcome}\n`);
   return 0;
 }
 

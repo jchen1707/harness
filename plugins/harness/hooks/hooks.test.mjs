@@ -1061,7 +1061,8 @@ describe('the wiring covers the surface each guard needs', () => {
       'protect_paths.mjs',
       'format_edited.mjs',
       'verify.mjs',
-      'session_learnings.mjs',
+      'codex_session_learnings.mjs',
+      'learning_recall.mjs',
     ]) {
       assert.ok(
         commands.includes(`\${CLAUDE_PLUGIN_ROOT}/hooks/${script}`),
