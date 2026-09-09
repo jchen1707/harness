@@ -7,10 +7,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { distilTranscript } from './session_learnings.mjs';
 
-const hook = new URL('./session_learnings.mjs', import.meta.url).pathname;
+const hook = fileURLToPath(new URL('./session_learnings.mjs', import.meta.url));
 test('missing transcript is a capture failure, never an uneventful short session', () => {
   const result = distilTranscript({
     transcriptPath: '/nonexistent/learning-repair.jsonl',
@@ -44,10 +45,18 @@ test('first capture creates both indexes and retains canonical project across wo
       'fixture',
     ]);
     git(['worktree', 'add', '-b', 'ticket', tree]);
+    // Stub only the model subprocess. Keep the real hook, Git identity and vault writes.
+    const preload = join(bin, 'distiller-fixture.mjs');
     writeFileSync(
-      join(bin, 'claude'),
-      '#!/bin/sh\nprintf "SUMMARY: Recovery preserves source\\n\\n## Implementation learnings\\nRetain the source snapshot before restarting interrupted execution.\\n"\n',
-      { mode: 0o755 },
+      preload,
+      `import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const original = childProcess.spawnSync;
+childProcess.spawnSync = (command, ...args) => command === 'claude'
+  ? { status: 0, stdout: 'SUMMARY: Recovery preserves source\\n\\n## Implementation learnings\\nRetain the source snapshot before restarting interrupted execution.\\n', stderr: '' }
+  : original(command, ...args);
+syncBuiltinESMExports();
+`,
     );
     const transcript = join(root, 'session.jsonl');
     writeFileSync(
@@ -59,12 +68,12 @@ test('first capture creates both indexes and retains canonical project across wo
     const env = {
       ...fixtureEnv,
       OBSIDIAN_VAULT_DIRECTORY: vault,
-      PATH: bin + ':' + process.env.PATH,
+      LEARNINGS_DISTILLER: 'claude',
       CLAUDE_LEARNINGS_OFF: '0',
       CLAUDE_LEARNINGS_SKIP: '0',
     };
     const run = (environment = env) =>
-      spawnSync(process.execPath, [hook], {
+      spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, hook], {
         env: environment,
         input: JSON.stringify({
           cwd: tree,
