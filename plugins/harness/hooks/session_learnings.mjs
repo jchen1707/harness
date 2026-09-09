@@ -668,7 +668,10 @@ export function distilTranscript(options) {
   }
   try {
     // A sparse factory export cannot improve a note already distilled from a richer source.
-    if (evidence === 'retained-events-partial' && existingNote(readNotes(directory), sessionId)) {
+    if (
+      ['retained-events-partial', 'retained-native-prefix'].includes(evidence) &&
+      existingNote(readNotes(directory), sessionId)
+    ) {
       return { target: '', outcome: 'skipped: existing note retained for partial evidence' };
     }
     return distilUnlocked(options);
