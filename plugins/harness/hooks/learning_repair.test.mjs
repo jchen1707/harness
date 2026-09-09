@@ -1,3 +1,7 @@
+// Git hooks export repository selectors. Fixtures must select their own repositories.
+const fixtureEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+);
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -25,7 +29,7 @@ test('first capture creates both indexes and retains canonical project across wo
     const bin = join(root, 'bin');
     for (const p of [repo, vault, bin]) mkdirSync(p);
     const git = (args) => {
-      const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+      const r = spawnSync('git', args, { cwd: repo, env: fixtureEnv, encoding: 'utf8' });
       assert.equal(r.status, 0, r.stderr);
     };
     git(['init']);
@@ -53,7 +57,7 @@ test('first capture creates both indexes and retains canonical project across wo
       }) + '\n',
     );
     const env = {
-      ...process.env,
+      ...fixtureEnv,
       OBSIDIAN_VAULT_DIRECTORY: vault,
       PATH: bin + ':' + process.env.PATH,
       CLAUDE_LEARNINGS_OFF: '0',
