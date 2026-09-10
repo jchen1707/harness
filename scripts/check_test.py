@@ -184,6 +184,24 @@ class ConfigContract(unittest.TestCase):
                 self.assertEqual(self.contract.violations(document, self.schema), [])
         self.assertTrue(checked, "no config was checked -- the assertion would be vacuous")
 
+    def test_profile_review_axes_are_optional_and_keep_mandatory_axes(self) -> None:
+        config = {
+            "name": "x", "apps": ["app"],
+            "delivery": {
+                "default": "prototype", "requirements": {},
+                "profiles": {name: {"required": [], "deferrals": []}
+                             for name in ("prototype", "core", "hardening")},
+            },
+        }
+        self.assertEqual(self.contract.violations(config, self.schema), [])
+        profile = config["delivery"]["profiles"]["prototype"]
+        profile["reviewAxes"] = ["standards", "spec"]
+        self.assertEqual(self.contract.violations(config, self.schema), [])
+        for invalid in ([], ["spec"], ["standards"], ["security"], "prototype"):
+            with self.subTest(invalid=invalid):
+                profile["reviewAxes"] = invalid
+                self.assertTrue(self.contract.violations(config, self.schema))
+
     def test_gate_kinds_come_from_the_schema(self) -> None:
         # The value most likely to be extended, and the copy that would have gone stale
         # silently: `e2e` and `integration` were both added after the first four.
