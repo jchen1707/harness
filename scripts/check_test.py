@@ -184,7 +184,7 @@ class ConfigContract(unittest.TestCase):
                 self.assertEqual(self.contract.violations(document, self.schema), [])
         self.assertTrue(checked, "no config was checked -- the assertion would be vacuous")
 
-    def test_profile_review_axes_are_optional_and_keep_mandatory_axes(self) -> None:
+    def test_profile_review_axes_allow_spec_only_and_keep_spec_required(self) -> None:
         config = {
             "name": "x", "apps": ["app"],
             "delivery": {
@@ -195,9 +195,10 @@ class ConfigContract(unittest.TestCase):
         }
         self.assertEqual(self.contract.violations(config, self.schema), [])
         profile = config["delivery"]["profiles"]["prototype"]
-        profile["reviewAxes"] = ["standards", "spec"]
-        self.assertEqual(self.contract.violations(config, self.schema), [])
-        for invalid in ([], ["spec"], ["standards"], ["security"], "prototype"):
+        for selection in (["spec"], ["standards", "spec"]):
+            profile["reviewAxes"] = selection
+            self.assertEqual(self.contract.violations(config, self.schema), [])
+        for invalid in ([], ["standards"], ["security"], ["spec", "spec"], "prototype"):
             with self.subTest(invalid=invalid):
                 profile["reviewAxes"] = invalid
                 self.assertTrue(self.contract.violations(config, self.schema))
