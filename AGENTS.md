@@ -173,6 +173,14 @@ for why that file has the shape it does.
   four scripts by repo-relative path in its own settings and its own Codex adapter, because
   only that repo knows where it put them.
 
+## pstack, the third-party method layer
+
+Every harness repository and template enables `pstack@pstack-claude` and declares its
+marketplace in `.claude/settings.json`, so a fresh clone gets it after the trust prompt.
+Layer A does not vendor pstack and does not pin it yet, and pstack never enters a factory
+sandbox. `plugins/harness/docs/agents/pstack.md` says why, and which job each overlapping
+pstack skill owns next to layer A's commands, skills and frames.
+
 ## Changing layer A
 
 1. Edit under `plugins/harness/` on `v2`.
