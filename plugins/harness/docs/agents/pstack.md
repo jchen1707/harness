@@ -26,10 +26,17 @@ Every harness repository and every template carries the same block in
 
 - **The plugin id is the upstream one.** A user who already enables `pstack@pstack-claude`
   globally gets the same plugin, not a second copy competing for the `pstack:` namespace.
-- **The marketplace line is what a fresh clone lacks.** After the workspace trust prompt,
-  Claude Code clones the marketplace. pstack's entry in it is a relative path, so the plugin
-  loads with no install step. Measured on 2026-09-30: `claude plugin list`, run in a
-  directory that carries this block, reports `pstack@pstack-claude` enabled.
+- **The marketplace line is what a fresh clone lacks.** Measured on 2026-09-30 with an empty
+  Claude Code profile and the folder marked trusted: the session registered the
+  `pstack-claude` marketplace, cloned it, and placed pstack in the plugin cache with no
+  install command. It wrote no install record, so `claude plugin list` still reports "No
+  plugins installed". Not measured: that an authenticated session then lists the `pstack:`
+  skills, which the Claude Code docs state for a relative-path plugin source like pstack's.
+  If a session shows no `pstack:` skills, run `claude plugin install pstack@pstack-claude`
+  once. On a machine that already has pstack, the block changes nothing (`claude plugin list`
+  reports the existing install, enabled).
+- **A fresh machine gets upstream's current pstack.** The empty profile above received 0.9.53
+  while an existing machine kept 0.9.45. Nothing pins the version yet; see below.
 - **There is no `ref`.** A marketplace is registered once per machine under its name. A
   repository that pins `pstack-claude` to a tag contends with every other repository, and with
   the user's own registration, for the same clone.
