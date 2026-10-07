@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -185,11 +186,7 @@ def front_matter(text: str) -> list[str]:
 
 
 def shared_entries(target: Path) -> list[tuple[str, Path, str]]:
-    """`(name, source, pointer)` for every vendored command and skill, commands first.
-
-    The order is the one both stacks' drop lists already sit in, so reconciling one
-    reproduces the file rather than reshuffling it.
-    """
+    """`(name, source, pointer)` for every vendored command and skill, commands first."""
     vendor = target / VENDOR_DIR
     entries = [
         (path.stem, path, f"{VENDOR_DIR.as_posix()}/commands/{path.name}")
@@ -288,11 +285,19 @@ def write_stubs(target: Path) -> tuple[list[str], list[str]]:
 def reconcile_drop_list(target: Path, names: list[str]) -> list[str]:
     """Keep `transform.json`'s per-stub drop entries equal to the set of stubs.
 
-    Only for a consumer that already drops stubs individually. `python-harness` does,
-    because its `.claude/skills` is a symlink to the whole directory: a stub that survives
-    the transform materialises on `main` beside the plugin's real skill, and nothing says
-    which of the two answers. `frontend-harness` drops `.agents` wholesale and needs none of
-    this, which is why the convention is detected rather than assumed.
+    Only for a consumer that already drops stubs individually. Where `.claude/skills` is a
+    symlink to `.agents/skills`, a stub that survives the transform materialises on `main`
+    beside the plugin's real skill, and nothing says which of the two answers. A consumer
+    that does not link the directory needs none of this, which is why the convention is
+    detected rather than assumed.
+
+    Layer A owns the one-segment entry `.claude/skills/<name>` for each stub it ships, and
+    each one that no longer resolves: a stub it retired, in this sync or an earlier one.
+    Reading that from the tree, not from what this run deleted, keeps a rerun after a
+    refusal or a crash from taking the leftover for the repository's own. The main build
+    refuses to drop a missing path, so a dangling entry goes whoever added it. Every other
+    entry is the repository's own and stays where it is: `frontend-harness` drops its own
+    skills' Codex-only `agents/` sidecars in the same list.
 
     The file is rewritten only when this script can reproduce it byte-for-byte first. That
     guard matters more here than anywhere else in this repository: `blocks` entries quote
@@ -312,27 +317,38 @@ def reconcile_drop_list(target: Path, names: list[str]) -> list[str]:
     if not isinstance(drop, list):
         return []
     prefix = f"{Path('.claude/skills').as_posix()}/"
-    existing = [entry for entry in drop if isinstance(entry, str) and entry.startswith(prefix)]
-    if not existing:
+    wanted = [f"{prefix}{name}" for name in names]
+    retired = [
+        entry
+        for entry in drop
+        if isinstance(entry, str)
+        and entry.startswith(prefix)
+        and "/" not in entry.removeprefix(prefix)
+        and entry not in wanted
+        and not os.path.lexists(target / entry)
+    ]
+    present = [entry for entry in drop if entry in wanted or entry in retired]
+    if not present:
         return []  # This consumer does not use per-stub drops.
 
-    wanted = [f"{prefix}{name}" for name in names]
-    if existing == wanted:
+    missing = [entry for entry in wanted if entry not in present]
+    changes = [*(f"add {entry}" for entry in missing), *(f"remove {entry}" for entry in retired)]
+    if not changes:
         return []
 
     if json.dumps(manifest, indent=2, ensure_ascii=True) + "\n" != raw:
         raise SystemExit(
             f"refusing to edit {TRANSFORM}: this script cannot reproduce it byte-for-byte, "
             f"so rewriting it would reformat rules that quote exact bytes of other files. "
-            f"Add these by hand: {', '.join(sorted(set(wanted) - set(existing)))}"
+            f"Make these drop-list changes by hand: {', '.join(changes)}"
         )
 
-    head = drop.index(existing[0])
+    after = drop.index(present[-1]) + 1
     manifest["drop"] = [
-        entry for entry in drop[:head] if entry not in existing
-    ] + wanted + [entry for entry in drop[head:] if entry not in existing]
+        entry for entry in drop[:after] + missing + drop[after:] if entry not in retired
+    ]
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    return sorted(set(wanted) ^ set(existing))
+    return changes
 
 
 def cmd_sync(harness: Path, target: Path) -> int:

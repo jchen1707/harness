@@ -24,6 +24,7 @@ step in this repository and adding one to run its own gates would be a bad trade
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,78 @@ class VendorRoundTrip(unittest.TestCase):
             result.stderr + result.stdout,
             "sync refused a dirty checkout but did not say why",
         )
+
+    def stub_entries(self) -> list[str]:
+        root = self.target / ".agents" / "skills"
+        return [
+            f".claude/skills/{path.parent.name}"
+            for path in sorted(root.glob("*/SKILL.md"))
+            if ".agents/vendor/harness" in path.read_text()
+        ]
+
+    def add_skill(self, name: str, body: str) -> None:
+        skill = self.target / ".agents" / "skills" / name
+        (skill / "agents").mkdir(parents=True)
+        (skill / "SKILL.md").write_text(body)
+        (skill / "agents" / "openai.yaml").write_text("interface:\n  display_name: Own\n")
+        self.addCleanup(shutil.rmtree, skill, ignore_errors=True)
+
+    def write_drop_list(self, drop: list[str]) -> Path:
+        """A consumer that links `.claude/skills` to `.agents/skills` and drops `drop` on main."""
+        (self.target / ".claude").mkdir()
+        (self.target / ".claude" / "skills").symlink_to(Path("..") / ".agents" / "skills")
+        self.addCleanup(shutil.rmtree, self.target / ".claude")
+        path = self.target / ".agents" / "transform" / "transform.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"drop": drop}, indent=2) + "\n")
+        self.addCleanup(shutil.rmtree, path.parent)
+        return path
+
+    def test_sync_keeps_the_drop_entries_the_consumer_owns(self) -> None:
+        """frontend-harness#72: sync deleted the repo's own drop entries and reordered the rest."""
+        own = [".claude/skills/delivery/agents", ".claude/skills/draft"]
+        drop = [".agents", *sorted([*self.stub_entries(), *own])]
+        self.add_skill("delivery", "---\nname: delivery\n---\n\nThe repo's own skill.\n")
+        self.add_skill("draft", "---\nname: draft\n---\n\nKept off main by the repo.\n")
+        path = self.write_drop_list(drop)
+
+        result = sync(self.source, self.target)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(path.read_text())["drop"], drop)
+
+    def test_sync_adds_its_new_entries_and_removes_every_retired_one(self) -> None:
+        """A stub retired by an earlier run, or a refused one, leaves an entry that still goes."""
+        stubs = self.stub_entries()
+        self.add_skill("delivery", "---\nname: delivery\n---\n\nThe repo's own skill.\n")
+        self.add_skill("retired", "Read `.agents/vendor/harness/skills/retired/SKILL.md`.\n")
+        path = self.write_drop_list(
+            [
+                ".agents",
+                *stubs[1:],
+                ".claude/skills/retired",
+                ".claude/skills/gone",
+                ".claude/skills/delivery/agents",
+            ]
+        )
+
+        result = sync(self.source, self.target)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(path.read_text())["drop"],
+            [".agents", *stubs[1:], stubs[0], ".claude/skills/delivery/agents"],
+        )
+
+    def test_a_repo_owned_entry_alone_does_not_opt_into_per_stub_drops(self) -> None:
+        drop = [".agents", ".claude/skills/delivery/agents"]
+        self.add_skill("delivery", "---\nname: delivery\n---\n\nThe repo's own skill.\n")
+        path = self.write_drop_list(drop)
+
+        result = sync(self.source, self.target)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(path.read_text())["drop"], drop)
 
 
 class ConfigContract(unittest.TestCase):
