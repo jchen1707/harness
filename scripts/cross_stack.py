@@ -184,7 +184,7 @@ def gate_stack(stack: Path, asserted: list[str]) -> tuple[bool, list[str]]:
         return False, [f"{name}: the synced gate_report.mjs emitted no report:\n{detail}"]
 
     ran = _print_gates(report)
-    return ran > 0, _judge(name, report, ran)
+    return ran > 0, _judge(name, report)
 
 
 def _print_gates(report: dict) -> int:
@@ -206,7 +206,7 @@ def _print_gates(report: dict) -> int:
     return ran
 
 
-def _judge(name: str, report: dict, ran: int) -> list[str]:
+def _judge(name: str, report: dict) -> list[str]:
     """The report's verdict as this job's failures.
 
     `incomplete` is kept apart from `fail` on purpose. A gate that could not start does not
@@ -223,11 +223,9 @@ def _judge(name: str, report: dict, ran: int) -> list[str]:
         missing = report.get("missingApps") or []
         detail = ", ".join(stalled) or f"apps with no config: {', '.join(missing)}"
         return [f"{name}: could not prove layer A -- {detail} never ran"]
-    if ran == 0:
-        # Layer A moved, the gates were asked, and none of them executed.
-        # With the change filter bypassed,
-        # this indicates no eligible gate executed (for example, an empty or entirely
-        # disabled gate list). A pass here would be the vacuous green.
+    if verdict == "skipped":
+        # Layer A moved and the gates were forced, yet none executed: an empty or
+        # entirely disabled gate list. Passing here would be the vacuous green.
         return [
             f"{name}: layer A changed but no gate ran -- check eligible gates "
             f"in {name}/harness.config.json"

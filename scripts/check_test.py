@@ -269,7 +269,7 @@ class CrossStackVerdict(unittest.TestCase):
 
     def test_a_failing_gate_is_a_failure_that_names_the_gate(self) -> None:
         report = self.report("fail", [{"name": "ruff check", "status": "fail"}])
-        problems = self.cross_stack._judge("python-harness", report, ran=1)
+        problems = self.cross_stack._judge("python-harness", report)
         self.assertEqual(len(problems), 1)
         self.assertIn("ruff check", problems[0])
         self.assertIn("fail against this layer A", problems[0])
@@ -279,19 +279,19 @@ class CrossStackVerdict(unittest.TestCase):
             "incomplete",
             [{"name": "playwright", "status": "unavailable"}, {"name": "eslint", "status": "pass"}],
         )
-        problems = self.cross_stack._judge("frontend-harness", report, ran=1)
+        problems = self.cross_stack._judge("frontend-harness", report)
         self.assertEqual(len(problems), 1)
         self.assertIn("could not prove", problems[0])
         self.assertNotIn("fail against this layer A", problems[0])
 
     def test_a_clean_run_is_no_failure(self) -> None:
         report = self.report("pass", [{"name": "ruff check", "status": "pass"}])
-        self.assertEqual(self.cross_stack._judge("python-harness", report, ran=1), [])
+        self.assertEqual(self.cross_stack._judge("python-harness", report), [])
 
     def test_layer_a_moved_but_nothing_ran_is_the_vacuous_green(self) -> None:
         """The retargeted guard: a skip is honest only when layer A did not move."""
-        report = self.report("pass", [{"name": "ruff check", "status": "skipped_unchanged"}])
-        problems = self.cross_stack._judge("python-harness", report, ran=0)
+        report = self.report("skipped", [{"name": "ruff check", "status": "disabled"}])
+        problems = self.cross_stack._judge("python-harness", report)
         self.assertEqual(len(problems), 1)
         self.assertIn("no gate ran", problems[0])
 

@@ -62,7 +62,8 @@ covering the change, a metric that came back null, a filter that matched no file
 failure mode this repository exists to make loud. Distinguished from an honest pass by
 naming what did _not_ happen, which is why the report has `skipped_unchanged`,
 `not_applicable`, `disabled` and `unavailable` rather than just pass and fail — and why its
-verdict is `incomplete`, never `pass`, when a gate could not start.
+verdict is `incomplete`, never `pass`, when a gate could not start, and `skipped`, never
+`pass`, when no gate ran.
 
 ## Review
 
