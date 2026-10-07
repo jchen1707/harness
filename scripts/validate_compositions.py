@@ -82,7 +82,7 @@ def main() -> int:
                     timeout=1800,
                 )
                 report["gates"] = json.loads(gates.stdout)
-                failed |= gates.returncode != 0
+                failed |= gates.returncode != 0 or report["gates"]["verdict"] != "pass"
             else:
                 failed = True
             (args.reports / f"{preset}.json").write_text(json.dumps(report, indent=2) + "\n")
