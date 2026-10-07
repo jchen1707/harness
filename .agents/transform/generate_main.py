@@ -173,37 +173,6 @@ def materialise_symlinks(root: Path, expected: dict[str, str]) -> None:
             shutil.copy2(resolved, link)
 
 
-def materialise_pointers(root: Path, expected: dict[str, str]) -> None:
-    """Replace each adapter *pointer file* with the canonical file it points at.
-
-    The frontend harness cannot use symlinks for its adapters: its CI runs on Windows as
-    well as Linux, and a checkout with `core.symlinks=false` turns every link into a text
-    file containing a path. So the adapter is an ordinary file that carries the Claude
-    frontmatter and a one-line body telling the agent to read the canonical file. On
-    `main` there is no canonical file to read, so the pointer has to become its target.
-
-    The canonical file repeats the adapter's frontmatter verbatim, which is what makes
-    this a whole-file copy rather than a splice.
-    """
-    for pointer_path, target in expected.items():
-        pointer = root / pointer_path
-        if pointer.is_symlink() or not pointer.is_file():
-            raise TransformError(
-                f"{pointer_path} is not a regular file — the manifest expects a pointer stub"
-            )
-        # A stub that no longer names its target is a stub somebody filled in by hand.
-        # Overwriting it would silently discard their edit, so stop instead.
-        if target not in pointer.read_text(encoding="utf-8"):
-            raise TransformError(
-                f"{pointer_path} does not reference {target!r} — either it was edited by "
-                f"hand, or the manifest is stale"
-            )
-        resolved = (pointer.parent / target).resolve()
-        if not resolved.is_file():
-            raise TransformError(f"{pointer_path} points at {target!r}, which does not exist")
-        shutil.copy2(resolved, pointer)
-
-
 # Harness-specific regions are marked in the source, in whatever comment syntax the file
 # uses. Two kinds, and they are not symmetrical:
 #
@@ -361,7 +330,6 @@ def generate(source: Path, destination: Path, manifest: dict) -> None:
         shutil.rmtree(destination)
     copy_tree(source, destination)
     materialise_symlinks(destination, manifest.get("symlinks", {}))
-    materialise_pointers(destination, manifest.get("pointers", {}))
     drop(destination, manifest.get("drop", []))
     resolve_regions(destination)
     apply_blocks(destination, manifest.get("blocks", []))
